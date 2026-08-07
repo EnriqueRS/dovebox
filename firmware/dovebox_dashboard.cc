@@ -30,6 +30,9 @@
 // Logo embebido del proveedor (dovebox_logos.cc, generado por gen_logos.py)
 const lv_image_dsc_t* dovebox_logo(const char* feed);
 
+// Font grande para el reloj (30px base → 240% = ~72px, como el preview)
+LV_FONT_DECLARE(font_noto_sans_basic_30_4);
+
 #define TAG "DoveboxDashboard"
 
 // ---------------------------------------------------------------------------
@@ -152,6 +155,8 @@ private:
     lv_obj_t* eye_right_ = nullptr;
     lv_obj_t* pupil_left_ = nullptr;
     lv_obj_t* pupil_right_ = nullptr;
+    lv_obj_t* lid_left_ = nullptr;
+    lv_obj_t* lid_right_ = nullptr;
     lv_obj_t* face_time_ = nullptr;
     int last_blink_ms_ = 0;
     int blink_start_ms_ = -1;  // -1 = sin parpadeo activo (máquina de estados)
@@ -180,6 +185,7 @@ private:
     static std::vector<RoomInfo> g_rooms;
     static std::vector<NewsItem> g_news;
     static bool g_data_dirty;
+    volatile bool first_fetch_ok_ = false;  // el fetch OK sube el periodo del poll desde el hilo LVGL
 
     static lv_obj_t* MakePanel(lv_obj_t* parent) {
         lv_obj_t* p = lv_obj_create(parent);
@@ -329,8 +335,41 @@ private:
         face_time_ = lv_label_create(v);
         lv_label_set_text(face_time_, "00:00");
         lv_obj_set_style_text_color(face_time_, CLR_FAINT, 0);
-        lv_obj_set_style_text_font(face_time_, font, 0);
-        lv_obj_align(face_time_, LV_ALIGN_CENTER, 0, 102);
+        lv_obj_set_style_text_font(face_time_, &font_noto_sans_basic_30_4, 0);
+        lv_obj_set_style_transform_scale_x(face_time_, 120, 0);
+        lv_obj_set_style_transform_scale_y(face_time_, 120, 0);
+        lv_obj_align(face_time_, LV_ALIGN_CENTER, 0, 96);
+
+        // Párpados: overlay negro/cian exactamente sobre cada ojo. El parpadeo
+        // NO escala los ojos (eso dejaba los ojos achatados en v7-v10): solo
+        // muestra/oculta estos párpados. Imposible que se deformen.
+        lid_left_ = lv_obj_create(v);
+        lv_obj_set_size(lid_left_, 104, 126);
+        lv_obj_set_style_radius(lid_left_, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(lid_left_, lv_color_hex(0x0a0f14), 0);
+        lv_obj_set_style_border_width(lid_left_, 2, 0);
+        lv_obj_set_style_border_color(lid_left_, lv_color_hex(0x2e5f78), 0);
+        lv_obj_set_style_shadow_color(lid_left_, CLR_CIAN, 0);
+        lv_obj_set_style_shadow_opa(lid_left_, LV_OPA_30, 0);
+        lv_obj_set_style_shadow_width(lid_left_, 22, 0);
+        lv_obj_set_style_shadow_spread(lid_left_, 2, 0);
+        lv_obj_set_style_pad_all(lid_left_, 0, 0);
+        lv_obj_align(lid_left_, LV_ALIGN_CENTER, -64, -46);
+        lv_obj_add_flag(lid_left_, LV_OBJ_FLAG_HIDDEN);
+
+        lid_right_ = lv_obj_create(v);
+        lv_obj_set_size(lid_right_, 104, 126);
+        lv_obj_set_style_radius(lid_right_, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(lid_right_, lv_color_hex(0x0a0f14), 0);
+        lv_obj_set_style_border_width(lid_right_, 2, 0);
+        lv_obj_set_style_border_color(lid_right_, lv_color_hex(0x2e5f78), 0);
+        lv_obj_set_style_shadow_color(lid_right_, CLR_CIAN, 0);
+        lv_obj_set_style_shadow_opa(lid_right_, LV_OPA_30, 0);
+        lv_obj_set_style_shadow_width(lid_right_, 22, 0);
+        lv_obj_set_style_shadow_spread(lid_right_, 2, 0);
+        lv_obj_set_style_pad_all(lid_right_, 0, 0);
+        lv_obj_align(lid_right_, LV_ALIGN_CENTER, 64, -46);
+        lv_obj_add_flag(lid_right_, LV_OBJ_FLAG_HIDDEN);
         return v;
     }
 
@@ -354,7 +393,9 @@ private:
         clock_time_ = lv_label_create(v);
         lv_label_set_text(clock_time_, "00:00");
         lv_obj_set_style_text_color(clock_time_, CLR_TEXT, 0);
-        lv_obj_set_style_text_font(clock_time_, font, 0);
+        // Font grande (30px) a 240% = ~72px, como el preview (antes usaba el
+        // font del tema, 16px → 38px, se veía muy pequeña)
+        lv_obj_set_style_text_font(clock_time_, &font_noto_sans_basic_30_4, 0);
         lv_obj_set_style_transform_scale_x(clock_time_, 240, 0);
         lv_obj_set_style_transform_scale_y(clock_time_, 240, 0);
         lv_obj_set_style_transform_pivot_x(clock_time_, lv_pct(50), 0);
@@ -533,45 +574,31 @@ private:
     }
 
     // ---------------- Cara (ojos) ----------------
-    // Parpadeo DETERMINISTA y AUTO-SANADOR (fix 2026-08-07 v10):
-    // - Máquina de estados por tiempo: SIEMPRE restaura a escala 100 al
-    //   terminar (nada de callbacks que puedan perderse).
-    // - En reposo, cada tick FUERZA escala 100: aunque cualquier otra cosa
-    //   dejara los ojos achatados, se corrigen solos en ≤100ms.
-    // - Duración 260ms (con el timer de 100ms se ven ~2-3 frames = parpadeo
-    //   visible y suave, igual que el preview).
+    // Parpadeo por PÁRPADOS (fix definitivo 2026-08-07 v11): los ojos NO se
+    // escalan nunca (el transform dejaba los ojos achatados en v7-v10 pese al
+    // self-healing). El parpadeo muestra/oculta dos overlays (párpados) con
+    // el mismo aspecto que el ojo cerrado. Máquina de estados por tiempo.
     void UpdateEyes() {
         if (!eye_left_) return;
         int now_ms = lv_tick_get();
 
         if (blink_start_ms_ < 0) {
-            // Self-healing: en reposo los ojos SIEMPRE a escala 100
-            lv_obj_set_style_transform_scale_y(eye_left_, 100, 0);
-            lv_obj_set_style_transform_scale_y(eye_right_, 100, 0);
             if (now_ms - last_blink_ms_ < 2500 + (rand() % 3500)) return;
             last_blink_ms_ = now_ms;
             blink_start_ms_ = now_ms;
-        }
-
-        int dt = now_ms - blink_start_ms_;
-        if (dt >= 260) {
-            lv_obj_set_style_transform_scale_y(eye_left_, 100, 0);
-            lv_obj_set_style_transform_scale_y(eye_right_, 100, 0);
-            blink_start_ms_ = -1;
+            // Cerrar ojos: mostrar párpados
+            lv_obj_remove_flag(lid_left_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(lid_right_, LV_OBJ_FLAG_HIDDEN);
             return;
         }
 
-        // Cerrar 0-130ms (100→10), abrir 130-260ms (10→100)
-        int32_t v;
-        if (dt < 130) {
-            v = 100 - (int32_t)(90 * dt / 130);
-        } else {
-            v = 10 + (int32_t)(90 * (dt - 130) / 130);
+        int dt = now_ms - blink_start_ms_;
+        if (dt >= 180) {
+            // Abrir ojos: ocultar párpados
+            lv_obj_add_flag(lid_left_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(lid_right_, LV_OBJ_FLAG_HIDDEN);
+            blink_start_ms_ = -1;
         }
-        lv_obj_set_style_transform_pivot_y(eye_left_, lv_pct(50), 0);
-        lv_obj_set_style_transform_pivot_y(eye_right_, lv_pct(50), 0);
-        lv_obj_set_style_transform_scale_y(eye_left_, v, 0);
-        lv_obj_set_style_transform_scale_y(eye_right_, v, 0);
     }
 
     // Polling de gestos desde el timer del reloj. ⚠️ NO usar
@@ -658,7 +685,7 @@ private:
         if (!http) return;
         http->SetHeader("Accept", "application/json");
         if (!http->Open("GET", "http://" AGGREGATOR_HOST ":" STR(AGGREGATOR_PORT) "/api/dashboard")) {
-            ESP_LOGW(TAG, "GET dashboard failed");
+            ESP_LOGW(TAG, "GET dashboard failed (red no lista?)");
             return;
         }
         if (http->GetStatusCode() != 200) {
@@ -668,16 +695,18 @@ private:
         }
         body = http->ReadAll();
         http->Close();
-        if (body.empty()) return;
-
-        // Primer fetch con éxito → subimos el periodo del timer a 60s
-        // (empezaba en 3s para reintentar hasta que la red estuviera lista).
-        if (poll_timer_) {
-            lv_timer_set_period(poll_timer_, POLL_INTERVAL_MS);
+        if (body.empty()) {
+            ESP_LOGW(TAG, "dashboard body vacío");
+            return;
         }
 
+        // Primer fetch con éxito → el hilo LVGL subirá el periodo a 60s
+        // (no llamamos a lv_timer_set_period aquí: es una API de LVGL y este
+        // task no corre en el hilo de LVGL → race condition).
+        first_fetch_ok_ = true;
+
         cJSON* root = cJSON_Parse(body.c_str());
-        if (!root) { ESP_LOGW(TAG, "JSON parse failed"); return; }
+        if (!root) { ESP_LOGW(TAG, "JSON parse failed (%d bytes)", (int)body.size()); return; }
 
         {
             // parseamos y copiamos a datos globales
@@ -773,6 +802,8 @@ private:
                 g_rooms = std::move(rooms);
                 g_news = std::move(news);
                 g_data_dirty = true;
+                ESP_LOGI(TAG, "dashboard OK: %d todos, %d rooms, %d news",
+                         (int)g_todos.size(), (int)g_rooms.size(), (int)g_news.size());
             }
         }
     }
@@ -1039,6 +1070,10 @@ void DoveboxDashboard::ClockTickCb(lv_timer_t* t) {
     self->UpdateGestures();
     self->UpdateClock();
     self->UpdateEyes();
+    if (self->first_fetch_ok_) {
+        self->first_fetch_ok_ = false;
+        if (self->poll_timer_) lv_timer_set_period(self->poll_timer_, POLL_INTERVAL_MS);
+    }
     if (g_data_dirty) {
         g_data_dirty = false;
         self->RenderAllData();
