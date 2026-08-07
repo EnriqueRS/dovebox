@@ -1,0 +1,1105 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DoveBox — Preview</title>
+<style>
+  :root {
+    --bg: #0a0b0e;
+    --screen-bg: #000000;
+    --panel: #0e1116;
+    --panel-2: #131722;
+    --border: #1d2430;
+    --border-soft: #181d27;
+    --text: #e8ecf1;
+    --text-dim: #7c8798;
+    --text-faint: #4a5260;
+    --accent: #4dd7ff;
+    --accent-2: #2f6bff;
+    --mint: #4ade80;
+    --amber: #fbbf24;
+    --red: #f87171;
+    --sky: #38bdf8;
+    --radius: 18px;
+    --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: radial-gradient(1200px 700px at 50% -10%, #10131c 0%, var(--bg) 55%);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--text);
+    padding: 40px 20px;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 34px;
+    width: 100%;
+    max-width: 560px;
+  }
+
+  .logo {
+    width: 42px; height: 42px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 21px;
+    box-shadow: 0 0 24px rgba(77, 215, 255, 0.35);
+  }
+
+  .topbar h1 {
+    font-size: 17px; font-weight: 700; letter-spacing: -0.01em;
+  }
+
+  .topbar .sub {
+    font-size: 12px; color: var(--text-dim);
+    margin-top: 2px;
+  }
+
+  .refresh-btn {
+    margin-left: auto;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: 10px;
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .2s ease;
+  }
+  .refresh-btn:hover { color: var(--text); border-color: var(--accent); }
+  .refresh-btn:active { transform: scale(0.96); }
+
+  /* ============ DEVICE FRAME ============ */
+  .device {
+    position: relative;
+    background: linear-gradient(160deg, #f7f4ee, #e9e4da);
+    border: 1px solid #d8d2c6;
+    border-radius: 56px;
+    padding: 16px;
+    box-shadow:
+      0 0 0 1px rgba(0,0,0,0.12),
+      0 40px 80px -20px rgba(0,0,0,0.6),
+      0 0 120px rgba(77, 215, 255, 0.08),
+      inset 0 1px 0 rgba(255,255,255,0.9);
+  }
+
+  .device::before { /* ambient glow */
+    content: "";
+    position: absolute;
+    inset: -60px;
+    background: radial-gradient(400px 300px at 50% 30%, rgba(77,215,255,0.09), transparent 70%);
+    z-index: -1;
+    pointer-events: none;
+  }
+
+  .speaker {
+    width: 90px; height: 7px;
+    border-radius: 4px;
+    background: #2a3038;
+    margin: 2px auto 14px;
+    position: relative;
+  }
+  .speaker::after {
+    content: "";
+    position: absolute; left: 50%; top: -2px;
+    transform: translateX(-50%);
+    width: 14px; height: 14px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #3d4450, #14171c);
+  }
+
+  /* ============ SCREEN 480×480 ============ */
+  .screen {
+    width: 480px;
+    height: 480px;
+    background: var(--screen-bg);
+    border-radius: 36px;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    box-shadow: inset 0 0 60px rgba(0,0,0,0.5);
+    user-select: none;
+  }
+
+  /* ---------- status bar ---------- */
+  .statusbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 13px 20px 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .statusbar .time { font-family: var(--mono); font-size: 13px; color: var(--text); letter-spacing: 0.04em; }
+  .statusbar .icons { display: flex; gap: 7px; align-items: center; font-size: 11px; }
+  .statusbar .icons svg { width: 13px; height: 13px; fill: var(--text-dim); }
+
+  .chip {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 20px;
+    background: rgba(77,215,255,0.10);
+    border: 1px solid rgba(77,215,255,0.25);
+    color: var(--accent);
+    margin: 4px 20px 2px;
+    align-self: flex-start;
+  }
+  .chip.offline { background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.25); color: var(--red); }
+
+  /* ---------- content area ---------- */
+  .viewport {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .view {
+    position: absolute;
+    inset: 0;
+    padding: 6px 20px 12px;
+    overflow-y: auto;
+    opacity: 0;
+    transform: translateX(24px);
+    transition: opacity .28s ease, transform .28s ease;
+    pointer-events: none;
+    scrollbar-width: none;
+  }
+  .view::-webkit-scrollbar { display: none; }
+  .view.active {
+    opacity: 1;
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+
+  .view-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin: 6px 0 12px;
+  }
+
+  /* ---------- HOME / clima ---------- */
+  .clima-list { display: flex; flex-direction: column; gap: 10px; }
+  .chart-wrap {
+    margin-top: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    padding: 10px 12px;
+  }
+  .chart-title {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 6px;
+  }
+  #clima-chart { width: 100%; height: 140px; display: block; }
+
+  .clima {
+    background: linear-gradient(180deg, var(--panel), var(--panel-2));
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    position: relative;
+    overflow: hidden;
+  }
+  .clima::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: linear-gradient(180deg, var(--accent), var(--accent-2));
+    opacity: 0.8;
+  }
+  .clima .icon {
+    width: 40px; height: 40px;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(77,215,255,0.07);
+    border: 1px solid rgba(77,215,255,0.14);
+    flex-shrink: 0;
+    position: relative;
+  }
+  .clima .icon::after {
+    content: "";
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow: 0 0 12px rgba(77,215,255,0.5);
+  }
+  .clima .icon.hot::after { background: linear-gradient(135deg, #ffb454, #ff5252); box-shadow: 0 0 12px rgba(255,82,82,0.5); }
+  .clima .icon.cold::after { background: linear-gradient(135deg, #7dd3fc, #38bdf8); box-shadow: 0 0 12px rgba(56,189,248,0.5); }
+  .clima .meta { flex: 1; min-width: 0; }
+  .clima .name { font-size: 12px; color: var(--text-dim); font-weight: 600; }
+  .clima .readings { display: flex; gap: 18px; margin-top: 6px; }
+  .clima .reading { display: flex; align-items: baseline; gap: 4px; }
+  .clima .reading .val {
+    font-family: var(--mono);
+    font-size: 21px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+  .clima .reading .unit { font-size: 10px; color: var(--text-faint); }
+  .clima .reading.temp .val { color: var(--text); }
+  .clima .reading.hum .val { color: var(--sky); }
+
+  .hum-bar {
+    position: absolute;
+    right: 16px; bottom: 12px;
+    width: 60px; height: 5px;
+    border-radius: 3px;
+    background: #1a2029;
+    overflow: hidden;
+  }
+  .hum-bar i {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--accent-2), var(--accent));
+  }
+
+  .quick-note {
+    margin-top: 14px;
+    background: rgba(77,215,255,0.05);
+    border: 1px dashed rgba(77,215,255,0.22);
+    border-radius: 14px;
+    padding: 12px 14px;
+    font-size: 11.5px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+  .quick-note b { color: var(--accent); font-weight: 600; }
+
+  /* ---------- TODO ---------- */
+  .todo-input {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .todo-input input {
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 11px 14px;
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+    transition: border-color .2s;
+  }
+  .todo-input input:focus { border-color: var(--accent); }
+  .todo-input input::placeholder { color: var(--text-faint); }
+  .todo-input button {
+    width: 42px;
+    border-radius: 12px;
+    border: 1px solid var(--accent);
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #001018;
+    font-size: 19px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform .15s ease, box-shadow .2s;
+    box-shadow: 0 0 18px rgba(77,215,255,0.25);
+  }
+  .todo-input button:hover { transform: scale(1.05); }
+  .todo-input button:active { transform: scale(0.94); }
+
+  .todo-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    margin-bottom: 8px;
+    transition: border-color .2s, background .2s;
+  }
+  .todo-item:hover { border-color: var(--border); }
+
+  .todo-check {
+    width: 20px; height: 20px;
+    border-radius: 7px;
+    border: 1.5px solid var(--border);
+    background: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    transition: all .2s;
+    color: transparent;
+    font-size: 11px;
+  }
+  .todo-check:hover { border-color: var(--mint); }
+  .todo-item.done .todo-check {
+    background: var(--mint);
+    border-color: var(--mint);
+    color: #00180a;
+    box-shadow: 0 0 12px rgba(74,222,128,0.35);
+  }
+  .todo-text { flex: 1; font-size: 13px; line-height: 1.4; }
+  .todo-item.done .todo-text { color: var(--text-faint); text-decoration: line-through; text-decoration-color: rgba(124,135,152,0.4); }
+  .todo-del {
+    background: none; border: none;
+    color: var(--text-faint);
+    font-size: 15px;
+    cursor: pointer;
+    padding: 4px;
+    opacity: 0;
+    transition: opacity .2s, color .2s;
+    border-radius: 6px;
+  }
+  .todo-item:hover .todo-del { opacity: 1; }
+  .todo-del:hover { color: var(--red); }
+  /* ---------- FACE / DoveBox ---------- */
+  .face-stage {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+  }
+  .face {
+    position: relative;
+    width: 300px;
+    height: 150px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 44px;
+  }
+  .eye {
+    position: relative;
+    width: 76px;
+    height: 88px;
+    background: radial-gradient(ellipse at 50% 38%, #101820 0%, #05080c 60%, #000 100%);
+    border: 2px solid rgba(77,215,255,0.35);
+    border-radius: 50% 50% 46% 46% / 52% 52% 48% 48%;
+    box-shadow:
+      inset 0 0 22px rgba(77,215,255,0.10),
+      0 0 26px rgba(77,215,255,0.12);
+    overflow: hidden;
+    transition: transform .18s cubic-bezier(.4,0,.2,1);
+    animation: idle-breathe 4.5s ease-in-out infinite;
+  }
+  .eye:nth-child(2) { animation-delay: .15s; }
+  @keyframes idle-breathe {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.025, 1.015); }
+  }
+  .eye::after {
+    content: "";
+    position: absolute;
+    left: 14%; top: 12%;
+    width: 38%; height: 30%;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(77,215,255,0.28), transparent 70%);
+    filter: blur(1px);
+  }
+  .pupil {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 26px; height: 30px;
+    margin: -15px 0 0 -13px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 38% 32%, #b8eaff 0%, #4dd7ff 38%, #0e5a75 100%);
+    box-shadow: 0 0 18px rgba(77,215,255,0.55);
+    transition: transform .12s ease-out;
+  }
+  .pupil::after {
+    content: "";
+    position: absolute;
+    left: 18%; top: 14%;
+    width: 30%; height: 26%;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.9);
+  }
+  .face.blink .eye { animation: blink .16s ease; }
+  @keyframes blink {
+    0% { transform: scaleY(1); }
+    50% { transform: scaleY(0.08); }
+    100% { transform: scaleY(1); }
+  }
+  .face.happy .eye { border-radius: 50% 50% 30% 30% / 70% 70% 30% 30%; }
+  .face-label {
+    margin-top: 18px;
+    font-size: 11px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: rgba(124,135,152,0.55);
+    font-weight: 600;
+  }
+  .face-status {
+    margin-top: 6px;
+    font-size: 10px;
+    color: rgba(77,215,255,0.45);
+    letter-spacing: 0.08em;
+  }
+  .face-time {
+    position: absolute;
+    bottom: 44px;
+    left: 0; right: 0;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 600;
+    color: rgba(124,135,152,0.55);
+    letter-spacing: 0.12em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- CLOCK ---------- */
+  .clock-stage {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+    overflow: hidden;
+  }
+  .clock-ring {
+    position: relative;
+    width: 330px;
+    height: 330px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .clock-ring svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+  }
+  .clock-ring .ring-track {
+    fill: none;
+    stroke: rgba(77,215,255,0.08);
+    stroke-width: 2;
+  }
+  .clock-ring .ring-progress {
+    fill: none;
+    stroke: url(#clockGrad);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    filter: drop-shadow(0 0 6px rgba(77,215,255,0.4));
+  }
+  .clock-tick {
+    stroke: rgba(124,135,152,0.28);
+    stroke-width: 1;
+  }
+  .clock-tick.major {
+    stroke: rgba(77,215,255,0.45);
+    stroke-width: 2;
+  }
+  .clock-time {
+    font-family: var(--mono);
+    font-size: 74px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--text);
+    line-height: 1;
+    text-shadow: 0 0 34px rgba(77,215,255,0.18);
+    font-variant-numeric: tabular-nums;
+  }
+  .clock-date {
+    margin-top: 14px;
+    font-size: 15px;
+    color: var(--text-dim);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+  .clock-date b {
+    color: var(--text);
+    font-weight: 700;
+  }
+  .clock-sub {
+    margin-top: 10px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    font-size: 10px;
+    color: rgba(124,135,152,0.45);
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+  }
+  .clock-sub .sep { opacity: 0.4; }
+
+  /* ---------- empty states ---------- */
+  .empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-faint);
+    font-size: 12.5px;
+    line-height: 1.7;
+  }
+  .empty-state .dot-marker {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin: 0 auto 14px;
+    box-shadow: 0 0 14px rgba(77,215,255,0.4);
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.5; transform: scale(0.9); }
+    50% { opacity: 1; transform: scale(1.1); }
+  }
+
+  /* ---------- NEWS ---------- */
+  .news-list { display: flex; flex-direction: column; gap: 9px; }
+  .news-item {
+    padding: 11px 14px;
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    border-radius: 13px;
+    transition: border-color .2s;
+  }
+  .news-item:hover { border-color: var(--border); }
+  .news-item .src {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 18px;
+  }
+  .news-item .src-logo {
+    height: 16px;
+    width: auto;
+    max-width: 90px;
+    object-fit: contain;
+    opacity: 0.9;
+    filter: brightness(0.9) contrast(1.1);
+  }
+  .news-item .src::before {
+    content: "";
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .news-item .src:has(.src-logo)::before { display: none; }
+  .news-item .src.besoccer::before { background: #ff9f43; }
+  .news-item .src.marca::before { background: #ff5252; }
+  .news-item .src.mundodeportivo::before { background: #5b8cff; }
+  .news-item .src.elespanol::before { background: #ffd166; }
+  .news-item .src.xataka::before { background: #9b5cff; }
+  .news-item .txt { font-size: 12.5px; line-height: 1.45; color: var(--text); }
+
+  /* ---------- dock / paginación ---------- */
+  .dock {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 0 16px;
+  }
+  .dock .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #2a3038;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    transition: all .3s ease;
+  }
+  .dock .dot.active {
+    width: 22px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--accent-2), var(--accent));
+    box-shadow: 0 0 10px rgba(77,215,255,0.35);
+  }
+
+  .updated {
+    margin-top: 26px;
+    font-size: 11px;
+    color: var(--text-faint);
+    font-family: var(--mono);
+  }
+  .updated b { color: var(--mint); font-weight: 600; }
+
+  @media (max-width: 560px) {
+    .screen { width: min(480px, 92vw); height: min(480px, 92vw); border-radius: 26px; }
+    .device { padding: 10px; border-radius: 38px; }
+  }
+</style>
+</head>
+<body>
+
+  <div class="topbar">
+    <div class="logo">🕊️</div>
+    <div>
+      <h1>DoveBox Preview</h1>
+      <div class="sub">Simulador · Pantalla 480×480 · AMOLED</div>
+    </div>
+    <button class="refresh-btn" onclick="loadAll(true)">↻ Actualizar</button>
+  </div>
+
+  <div class="device">
+    <div class="speaker"></div>
+    <div class="screen" id="screen">
+      <div class="statusbar">
+        <span class="time" id="clock">--:--</span>
+        <div class="icons">
+          <svg viewBox="0 0 24 24"><path d="M12 3v2h7v2h-7v2h7v2h-7v2h4v2h-4v2h7v2h-7v2h3v2h-3v2H9v-2H6v-2h3v-2H2v-2h7v-2H5v-2h4V9H4V7h5V5H6V3h6z"/></svg>
+          <svg viewBox="0 0 24 24"><path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6h-6z"/></svg>
+          <span id="bat" style="font-family:var(--mono);font-size:10px;color:var(--text);">100%</span>
+        </div>
+      </div>
+      <div class="chip" id="chip">● En línea</div>
+
+      <div class="viewport" id="viewport">
+        <section class="view active" id="view-face">
+          <div class="face-stage">
+            <div class="face" id="face">
+              <div class="eye"><div class="pupil"></div></div>
+              <div class="eye"><div class="pupil"></div></div>
+            </div>
+            <div class="face-label">DoveBox</div>
+            <div class="face-status">escuchando…</div>
+            <div class="face-time" id="faceTime">--:--</div>
+          </div>
+        </section>
+
+        <section class="view" id="view-clock">
+          <div class="clock-stage">
+            <div class="clock-ring">
+              <svg viewBox="0 0 330 330">
+                <defs>
+                  <linearGradient id="clockGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#2f6bff"/>
+                    <stop offset="100%" stop-color="#4dd7ff"/>
+                  </linearGradient>
+                </defs>
+                <circle class="ring-track" cx="165" cy="165" r="158"></circle>
+                <circle class="ring-progress" id="ringProgress" cx="165" cy="165" r="158"
+                        stroke-dasharray="992.7" stroke-dashoffset="0"></circle>
+              </svg>
+              <div style="text-align:center">
+                <div class="clock-time" id="clockTime">--:--</div>
+                <div class="clock-date" id="clockDate">—</div>
+                <div class="clock-sub"><span id="weekday">—</span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-home">
+          <div class="view-title">Clima en casa</div>
+          <div class="clima-list" id="clima-list"></div>
+          <div class="chart-wrap">
+            <div class="chart-title">Temperatura · 24h</div>
+            <canvas id="clima-chart" width="432" height="140"></canvas>
+          </div>
+        </section>
+
+        <section class="view" id="view-todo">
+          <div class="view-title">To Do</div>
+          <div class="todo-input">
+            <input id="todo-new" type="text" placeholder="Añade una tarea…" onkeydown="if(event.key==='Enter')addTodo()">
+            <button onclick="addTodo()">+</button>
+          </div>
+          <div id="todo-list"></div>
+        </section>
+
+        <section class="view" id="view-news">
+          <div class="view-title">Noticias</div>
+          <div class="news-list" id="news-list"></div>
+        </section>
+      </div>
+
+      <div class="dock">
+        <button class="dot active" data-view="face" onclick="switchView('face')"></button>
+        <button class="dot" data-view="clock" onclick="switchView('clock')"></button>
+        <button class="dot" data-view="home" onclick="switchView('home')"></button>
+        <button class="dot" data-view="todo" onclick="switchView('todo')"></button>
+        <button class="dot" data-view="news" onclick="switchView('news')"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="updated">Datos en vivo · última actualización <b id="updated">—</b></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+
+/* ---------- estado ---------- */
+let state = { todos: [], home: null, news: null };
+
+/* ---------- reloj ---------- */
+function tick() {
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  $("#clock").textContent = hh + ":" + mm;
+  const ft = $("#faceTime");
+  if (ft) ft.textContent = hh + ":" + mm;
+  $("#bat").textContent = (95 - Math.floor(d.getSeconds()/12)) + "%";
+}
+setInterval(tick, 1000); tick();
+
+/* ---------- navegación ---------- */
+function switchView(name) {
+  document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+  $("#view-" + name).classList.add("active");
+  document.querySelectorAll(".dock .dot").forEach(b => b.classList.toggle("active", b.dataset.view === name));
+}
+/* swipe (touch + ratón) */
+const ORDER = ["face", "clock", "home", "todo", "news"];
+let dragStart = null;
+const vp = $("#viewport");
+
+vp.addEventListener("touchstart", e => dragStart = e.touches[0].clientX, {passive:true});
+vp.addEventListener("touchend", e => {
+  if (dragStart === null) return;
+  const dx = e.changedTouches[0].clientX - dragStart;
+  dragStart = null;
+  navigateBy(dx);
+}, {passive:true});
+
+vp.addEventListener("mousedown", e => dragStart = e.clientX);
+vp.addEventListener("mouseup", e => {
+  if (dragStart === null) return;
+  const dx = e.clientX - dragStart;
+  dragStart = null;
+  navigateBy(dx);
+});
+vp.addEventListener("mousemove", e => {
+  if (dragStart !== null) e.preventDefault();
+}, {passive:false});
+
+function navigateBy(dx) {
+  if (Math.abs(dx) < 50) return;
+  const cur = ORDER.indexOf(document.querySelector(".view.active").id.replace("view-",""));
+  const next = dx < 0 ? Math.min(cur+1, ORDER.length-1) : Math.max(cur-1, 0);
+  if (next !== cur) switchView(ORDER[next]);
+}
+
+/* ---------- FACE: ojos animados ---------- */
+(function() {
+  const face = document.getElementById("face");
+  if (!face) return;
+  const pupils = face.querySelectorAll(".pupil");
+  const EYE_RANGE = 12; // px de recorrido de la pupila
+
+  // parpadeo periódico (3-6s aleatorio)
+  function blink() {
+    face.classList.add("blink");
+    setTimeout(() => face.classList.remove("blink"), 200);
+    setTimeout(blink, 2500 + Math.random() * 3500);
+  }
+  setTimeout(blink, 1800);
+
+  // mirar hacia un punto (ratio -1..1 en x e y)
+  function lookAt(px, py) {
+    const r = face.getBoundingClientRect();
+    if (!r.width) return;
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    let dx = (px - cx) / (r.width / 2);
+    let dy = (py - cy) / (r.height / 2);
+    dx = Math.max(-1, Math.min(1, dx));
+    dy = Math.max(-1, Math.min(1, dy));
+    pupils.forEach(p => {
+      p.style.transform = `translate(${dx * EYE_RANGE}px, ${dy * EYE_RANGE * 0.8}px)`;
+    });
+  }
+
+  // mirada ociosa: deambula suave por la pantalla
+  let idleTarget = { x: 0, y: 0 };
+  function idleWander() {
+    idleTarget = {
+      x: (Math.random() - 0.5) * 40,
+      y: (Math.random() - 0.5) * 20
+    };
+    pupils.forEach(p => {
+      p.style.transform = `translate(${idleTarget.x}px, ${idleTarget.y}px)`;
+    });
+    setTimeout(idleWander, 2500 + Math.random() * 3000);
+  }
+  setTimeout(idleWander, 1200);
+
+  // seguir al puntero / touch
+  const stage = face.closest(".face-stage");
+  stage.addEventListener("mousemove", e => lookAt(e.clientX, e.clientY));
+  stage.addEventListener("touchmove", e => {
+    const t = e.touches[0];
+    lookAt(t.clientX, t.clientY);
+  }, { passive: true });
+
+  // al tocar: expresión feliz momentánea
+  stage.addEventListener("click", () => {
+    face.classList.add("happy");
+    setTimeout(() => face.classList.remove("happy"), 700);
+  });
+})();
+
+/* ---------- CLOCK ---------- */
+(function() {
+  const timeEl = document.getElementById("clockTime");
+  const dateEl = document.getElementById("clockDate");
+  const weekdayEl = document.getElementById("weekday");
+  const ring = document.getElementById("ringProgress");
+  const DAYS = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+  const MONTHS = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const CIRC = 2 * Math.PI * 158;
+
+  function renderClock() {
+    const d = new Date();
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    // fracción del minuto 0..1
+    const frac = (d.getSeconds() + d.getMilliseconds() / 1000) / 60;
+    // ciclo armónico de 2 min: minuto impar = llenar, par = vaciar (sin saltos)
+    const filling = d.getMinutes() % 2 === 1;
+    timeEl.textContent = `${hh}:${mm}`;
+    dateEl.innerHTML = `${d.getDate()} <b>${MONTHS[d.getMonth()]}</b> ${d.getFullYear()}`;
+    weekdayEl.textContent = DAYS[d.getDay()];
+    if (filling) {
+      // llenar: el arco crece en sentido horario desde las 12h
+      ring.style.strokeDashoffset = (CIRC * (1 - frac)).toFixed(1);
+      ring.setAttribute("transform", "");
+    } else {
+      // vaciar en sentido horario: el hueco crece desde las 12h.
+      // Técnica sin offsets negativos (evita bugs de render con linecap round):
+      // arco visible [0, (1-frac)*CIRC] + círculo rotado frac*360° → el hueco
+      // avanza en horario desde las 12h. Rotación 360° ≡ 0, así que no hay salto.
+      ring.style.strokeDashoffset = (CIRC * frac).toFixed(1);
+      ring.setAttribute("transform", `rotate(${(frac * 360).toFixed(2)} 165 165)`);
+    }
+  }
+  renderClock();
+  setInterval(renderClock, 100);
+})();
+
+/* ---------- render: clima ---------- */
+function renderChart() {
+  const cv = $("#clima-chart");
+  if (!cv || !state.home || !state.home.rooms) return;
+  const rooms = state.home.rooms.filter(r => Array.isArray(r.history) && r.history.length >= 2);
+  const ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  if (!rooms.length) {
+    ctx.fillStyle = "rgba(124,135,152,0.4)";
+    ctx.font = "11px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("sin histórico todavía", W/2, H/2);
+    return;
+  }
+  const pad = { l: 26, r: 10, t: 10, b: 18 };
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+  // rango común: min/max de todos los valores
+  let lo = Infinity, hi = -Infinity;
+  for (const r of rooms) for (const v of r.history) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  if (!isFinite(lo)) return;
+  const span = (hi - lo) || 1;
+  lo -= span * 0.12; hi += span * 0.12;
+  const maxN = Math.max(...rooms.map(r => r.history.length));
+
+  // rejilla horizontal
+  ctx.strokeStyle = "rgba(124,135,152,0.12)";
+  ctx.lineWidth = 1;
+  for (let g = 0; g <= 3; g++) {
+    const y = pad.t + ih * g / 3;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+    const val = hi - (hi - lo) * g / 3;
+    ctx.fillStyle = "rgba(124,135,152,0.5)";
+    ctx.font = "8px monospace";
+    ctx.textAlign = "right";
+    ctx.fillText(val.toFixed(1), pad.l - 4, y + 3);
+  }
+  // etiquetas de hora (0h, 12h, 24h aprox)
+  const COLORS = ["#4dd7ff", "#38bdf8", "#4ade80"];
+  rooms.forEach((r, ri) => {
+    const n = r.history.length;
+    const color = COLORS[ri % COLORS.length];
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = pad.l + iw * i / (maxN - 1);
+      const y = pad.t + ih * (1 - (r.history[i] - lo) / (hi - lo));
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  });
+}
+
+function renderHome() {
+  const el = $("#clima-list");
+  if (!state.home || !state.home.rooms || !state.home.rooms.length) {
+    el.innerHTML = '<div class="empty-state"><div class="dot-marker"></div>Sin sensores<br>esperando datos…</div>';
+    renderChart();
+    return;
+  }
+  el.innerHTML = state.home.rooms.map(r => {
+    const t = parseFloat(r.temperature?.value);
+    const h = parseFloat(r.humidity?.value);
+    const humPct = isNaN(h) ? 0 : Math.min(100, h);
+    const iconCls = isNaN(t) ? "" : (t > 30 ? "hot" : t < 18 ? "cold" : "");
+    return `<div class="clima">
+      <div class="icon ${iconCls}"></div>
+      <div class="meta">
+        <div class="name">${r.name}</div>
+        <div class="readings">
+          <div class="reading temp"><span class="val">${isNaN(t) ? "—" : t.toFixed(1)}</span><span class="unit">°C</span></div>
+          <div class="reading hum"><span class="val">${isNaN(h) ? "—" : h.toFixed(0)}</span><span class="unit">%</span></div>
+        </div>
+      </div>
+      <div class="hum-bar"><i style="width:${humPct}%"></i></div>
+    </div>`;
+  }).join("");
+  renderChart();
+}
+
+/* ---------- render: todo ---------- */
+function renderTodo() {
+  const el = $("#todo-list");
+  if (!state.todos.length) {
+    el.innerHTML = `<div class="empty-state"><div class="dot-marker"></div>Lista vacía<br>Dime: <b style="color:var(--accent)">"añade algo al ToDo"</b><br>o usa el campo de arriba</div>`;
+    return;
+  }
+  el.innerHTML = state.todos.map((t, i) => `
+    <div class="todo-item ${t.done ? 'done' : ''}">
+      <button class="todo-check" onclick="toggleTodo(${i})">✓</button>
+      <div class="todo-text">${esc(t.text)}</div>
+      <button class="todo-del" onclick="delTodo(${i})">✕</button>
+    </div>`).join("");
+}
+
+/* ---------- render: news ---------- */
+const SRC_LABEL = { marca:"Marca", mundodeportivo:"Mundo Dep.", elespanol:"El Español", xataka:"Xataka", besoccer:"BeSoccer" };
+function renderNews() {
+  const el = $("#news-list");
+  if (!state.news || !state.news.feeds) {
+    el.innerHTML = '<div class="empty-state"><div class="dot-marker"></div>Cargando noticias…</div>';
+    return;
+  }
+  const feeds = state.news.feeds;
+  const order = ["marca", "besoccer", "mundodeportivo", "elespanol", "xataka"];
+  // round-robin: intercala 1 item de cada fuente para que nunca haya
+  // dos titulares del mismo proveedor seguidos
+  const perSource = {};
+  for (const k of order) perSource[k] = (feeds[k] || []).map(i => ({ src: k, title: i.title, link: i.link }));
+  const items = [];
+  let added = true;
+  while (added) {
+    added = false;
+    for (const k of order) {
+      if (perSource[k].length) {
+        items.push(perSource[k].shift());
+        added = true;
+      }
+    }
+  }
+  el.innerHTML = items.map(i => `
+    <div class="news-item" ${i.link ? `onclick="window.open('${i.link}','_blank')" style="cursor:pointer"` : ""}>
+      <div class="src ${i.src}"><img class="src-logo" src="/logos/${i.src}.png" alt="${i.src}" loading="lazy"></div>
+      <div class="txt">${esc(i.title)}</div>
+    </div>`).join("");
+}
+
+/* ---------- API ---------- */
+function esc(s) {
+  return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+async function loadAll(force) {
+  try {
+    const r = await fetch("/api/dashboard", { cache: "no-store" });
+    const d = await r.json();
+    state.todos = d.todos || [];
+    state.home = d.home;
+    state.news = d.news;
+    renderHome(); renderTodo(); renderNews();
+    const now = new Date();
+    $("#updated").textContent = now.toLocaleTimeString("es-ES", {hour:"2-digit", minute:"2-digit"});
+    $("#chip").textContent = "● En línea";
+    $("#chip").classList.remove("offline");
+  } catch (e) {
+    $("#chip").textContent = "● Sin conexión";
+    $("#chip").classList.add("offline");
+  }
+}
+
+async function addTodo() {
+  const input = $("#todo-new");
+  const text = input.value.trim();
+  if (!text) return;
+  const r = await fetch("/api/todos", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({text})
+  });
+  const d = await r.json();
+  state.todos = d.todos; renderTodo();
+  input.value = "";
+}
+
+async function toggleTodo(i) {
+  const r = await fetch("/api/todos/" + i, {
+    method: "PATCH",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({done: !state.todos[i].done})
+  });
+  const d = await r.json();
+  state.todos = d.todos; renderTodo();
+}
+
+async function delTodo(i) {
+  const r = await fetch("/api/todos/" + i, { method: "DELETE" });
+  const d = await r.json();
+  state.todos = d.todos; renderTodo();
+}
+
+/* ---------- arranque ---------- */
+loadAll();
+setInterval(loadAll, 60000);
+// deep-link por hash: /preview#clock, #home, #todo, #news, #face
+const hashView = (location.hash || "").replace("#", "");
+if (ORDER.includes(hashView)) switchView(hashView);
+window.addEventListener("hashchange", () => {
+  const v = (location.hash || "").replace("#", "");
+  if (ORDER.includes(v)) switchView(v);
+});
+</script>
+</body>
+</html>
+

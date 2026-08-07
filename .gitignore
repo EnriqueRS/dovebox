@@ -1,0 +1,15 @@
+# Secretos y ficheros locales
+.env
+*.token
+data/
+__pycache__/
+*.pyc
+
+# Firmware build
+build/
+output/
+sdkconfig
+sdkconfig.old
+
+# Logs
+*.log

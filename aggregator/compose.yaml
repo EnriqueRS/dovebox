@@ -1,0 +1,23 @@
+services:
+  dovebox-aggregator:
+    image: python:3.12-slim
+    container_name: dovebox-aggregator
+    restart: unless-stopped
+    ports:
+      - "18100:18100"
+    environment:
+      - HA_URL=http://192.168.100.73:8123
+      - HASS_TOKEN=${HASS_TOKEN:-}
+      - PORT=18100
+      - TODOS_FILE=/data/todos.json
+    volumes:
+      - ./web:/app:ro
+      - ./data:/data
+    working_dir: /app
+    command: ["python", "app.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:18100/health', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
