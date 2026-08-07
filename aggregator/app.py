@@ -53,7 +53,7 @@ FEED_LABELS = {
 BESOCCER_URL = "https://es.besoccer.com/noticias"
 CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
              "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
-MAX_ITEMS_PER_FEED = int(os.environ.get("MAX_ITEMS_PER_FEED", "5"))
+MAX_ITEMS_PER_FEED = int(os.environ.get("MAX_ITEMS_PER_FEED", "3"))
 CACHE_TTL = int(os.environ.get("CACHE_TTL", "300"))  # 5 min
 
 # Sensores HA: (nombre mostrado, entity temp, entity hum)
