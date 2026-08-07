@@ -79,6 +79,22 @@ static const char* news_label(const char* feed) {
     return feed;
 }
 
+// Color de serie por sensor (índice de habitación). MISMA paleta en la
+// gráfica y en el fondo ténue de las tarjetas del home, para poder
+// identificar a qué línea corresponde cada sensor.
+static lv_color_t room_series_color(size_t idx) {
+    static const lv_color_t colors[] = {
+        CLR_CIAN,                 // 0
+        lv_color_hex(0x4ade80),   // verde
+        lv_color_hex(0xffd166),   // amarillo
+        lv_color_hex(0xff7a45),   // naranja
+        lv_color_hex(0x9b5cff),   // morado
+        lv_color_hex(0xff5252),   // rojo
+        lv_color_hex(0x38bdf8),   // azul claro
+    };
+    return colors[idx % (sizeof(colors) / sizeof(colors[0]))];
+}
+
 struct TodoItem {
     std::string text;
     bool done = false;
@@ -137,8 +153,8 @@ private:
     lv_obj_t* pupil_left_ = nullptr;
     lv_obj_t* pupil_right_ = nullptr;
     lv_obj_t* face_time_ = nullptr;
-    volatile bool blink_busy_ = false;
     int last_blink_ms_ = 0;
+    int blink_start_ms_ = -1;  // -1 = sin parpadeo activo (máquina de estados)
 
     // Clock
     lv_obj_t* clock_time_ = nullptr;
@@ -502,46 +518,40 @@ private:
     }
 
     // ---------------- Cara (ojos) ----------------
+    // Parpadeo DETERMINISTA (fix 2026-08-07): las animaciones lv_anim con
+    // ready_cb se quedaban achatadas si la vista se ocultaba a mitad del
+    // parpadeo (el callback nunca llegaba y blink_busy_ quedaba a true).
+    // Ahora es una máquina de estados por tiempo: SIEMPRE restaura al 100%
+    // tras 90ms, pase lo que pase. Mismo comportamiento que el preview.
     void UpdateEyes() {
-        if (!eye_left_ || blink_busy_) return;
+        if (!eye_left_) return;
         int now_ms = lv_tick_get();
-        if (now_ms - last_blink_ms_ < 2500 + (rand() % 3500)) return;
-        last_blink_ms_ = now_ms;
-        blink_busy_ = true;
 
-        lv_anim_t a;
-        lv_anim_init(&a);
-        lv_anim_set_var(&a, eye_left_);
-        lv_anim_set_exec_cb(&a, BlinkCb);
-        lv_anim_set_values(&a, 100, 10);
-        lv_anim_set_time(&a, 90);
-        lv_anim_set_playback_time(&a, 90);
-        lv_anim_set_repeat_count(&a, 1);
-        lv_anim_set_ready_cb(&a, BlinkDoneCb);
-        lv_anim_start(&a);
+        if (blink_start_ms_ < 0) {
+            if (now_ms - last_blink_ms_ < 2500 + (rand() % 3500)) return;
+            last_blink_ms_ = now_ms;
+            blink_start_ms_ = now_ms;
+        }
 
-        lv_anim_t b;
-        lv_anim_init(&b);
-        lv_anim_set_var(&b, eye_right_);
-        lv_anim_set_exec_cb(&b, BlinkCb);
-        lv_anim_set_values(&b, 100, 10);
-        lv_anim_set_time(&b, 90);
-        lv_anim_set_playback_time(&b, 90);
-        lv_anim_set_repeat_count(&b, 1);
-        lv_anim_set_ready_cb(&b, BlinkDoneCb);
-        lv_anim_start(&b);
-    }
+        int dt = now_ms - blink_start_ms_;
+        if (dt >= 90) {
+            lv_obj_set_style_transform_scale_y(eye_left_, 100, 0);
+            lv_obj_set_style_transform_scale_y(eye_right_, 100, 0);
+            blink_start_ms_ = -1;
+            return;
+        }
 
-    static void BlinkCb(void* var, int32_t v) {
-        lv_obj_t* eye = (lv_obj_t*)var;
-        lv_obj_set_style_transform_scale_y(eye, v, 0);
-        lv_obj_set_style_transform_pivot_y(eye, lv_pct(50), 0);
-    }
-
-    static void BlinkDoneCb(lv_anim_t* a) {
-        lv_obj_t* eye = (lv_obj_t*)a->var;
-        if (eye) lv_obj_set_style_transform_scale_y(eye, 100, 0);
-        if (s_instance_) s_instance_->blink_busy_ = false;
+        // Cerrar 0-45ms (100→10), abrir 45-90ms (10→100)
+        int32_t v;
+        if (dt < 45) {
+            v = 100 - (int32_t)(90 * dt / 45);
+        } else {
+            v = 10 + (int32_t)(90 * (dt - 45) / 45);
+        }
+        lv_obj_set_style_transform_pivot_y(eye_left_, lv_pct(50), 0);
+        lv_obj_set_style_transform_pivot_y(eye_right_, lv_pct(50), 0);
+        lv_obj_set_style_transform_scale_y(eye_left_, v, 0);
+        lv_obj_set_style_transform_scale_y(eye_right_, v, 0);
     }
 
     // Polling de gestos desde el timer del reloj (más fiable que eventos,
@@ -763,9 +773,16 @@ private:
             MakeLabel(home_rows_, "sin datos todavía", CLR_FAINT, font);
             return;
         }
+        size_t room_idx = 0;
         for (auto& r : g_rooms) {
             lv_obj_t* panel = MakePanel(home_rows_);
             lv_obj_set_size(panel, 432, 96);
+            // Fondo ténue con el color de su serie en la gráfica: así se
+            // identifica qué sensor corresponde a cada línea (alpha ~12%).
+            lv_color_t tint = room_series_color(room_idx);
+            lv_obj_set_style_bg_color(panel, tint, 0);
+            lv_obj_set_style_bg_grad_color(panel, tint, 0);
+            lv_obj_set_style_bg_opa(panel, 32, 0);
 
             lv_obj_t* dot = lv_obj_create(panel);
             lv_obj_set_size(dot, 14, 14);
@@ -818,6 +835,7 @@ private:
             lv_obj_set_style_bg_color(bar, CLR_CIAN, LV_PART_INDICATOR);
             lv_obj_set_style_bg_grad_color(bar, CLR_AZUL, LV_PART_INDICATOR);
             lv_obj_set_style_bg_grad_dir(bar, LV_GRAD_DIR_HOR, LV_PART_INDICATOR);
+            room_idx++;
         }
 
         // Gráfica de temperatura 24h (2 series, una por habitación con datos)
@@ -847,24 +865,13 @@ private:
             lv_obj_set_style_bg_opa(chart, LV_OPA_TRANSP, LV_PART_MAIN);
 
             int room_idx = 0;
-            // Paleta fija por sensor: cada habitación con su propio color para
-            // distinguir las series en la gráfica.
-            static const lv_color_t kSeriesColors[] = {
-                CLR_CIAN,       // 0
-                lv_color_hex(0x4ade80),  // verde
-                lv_color_hex(0xffd166),  // amarillo
-                lv_color_hex(0xff7a45),  // naranja
-                lv_color_hex(0x9b5cff),  // morado
-                lv_color_hex(0xff5252),  // rojo
-                lv_color_hex(0x38bdf8),  // azul claro
-            };
-            constexpr size_t kNumColors = sizeof(kSeriesColors) / sizeof(kSeriesColors[0]);
             for (auto& r : g_rooms) {
                 if (r.history.size() < 2) continue;
                 std::vector<int32_t> values;
                 values.reserve(r.history.size());
                 for (float v : r.history) values.push_back((int32_t)(v * 10.0f));
-                lv_color_t sc = kSeriesColors[room_idx % kNumColors];
+                // Mismo color que el fondo de la tarjeta del sensor
+                lv_color_t sc = room_series_color(room_idx);
                 lv_chart_series_t* ser = lv_chart_add_series(chart, sc, LV_CHART_AXIS_PRIMARY_Y);
                 lv_obj_set_style_line_width(chart, 2, LV_PART_ITEMS);
                 lv_obj_set_style_size(chart, 2, 2, LV_PART_INDICATOR);

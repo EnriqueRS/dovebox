@@ -982,13 +982,18 @@ function renderHome() {
     renderChart();
     return;
   }
-  el.innerHTML = state.home.rooms.map(r => {
+  // Paleta por sensor — misma que en el firmware (dovebox_dashboard.cc):
+  // cian, verde, amarillo, naranja, morado, rojo, azul
+  const PALETTE = ["#4dd7ff", "#4ade80", "#ffd166", "#ff7a45", "#9b5cff", "#ff5252", "#38bdf8"];
+  el.innerHTML = state.home.rooms.map((r, ri) => {
     const t = parseFloat(r.temperature?.value);
     const h = parseFloat(r.humidity?.value);
     const humPct = isNaN(h) ? 0 : Math.min(100, h);
     const iconCls = isNaN(t) ? "" : (t > 30 ? "hot" : t < 18 ? "cold" : "");
-    return `<div class="clima">
-      <div class="icon ${iconCls}"></div>
+    const sc = PALETTE[ri % PALETTE.length];
+    // Fondo ténue con el color de su línea en la gráfica (alpha 12%)
+    return `<div class="clima" style="background:${sc}1f;border-color:${sc}33">
+      <div class="icon ${iconCls}" style="background:${sc};box-shadow:0 0 12px ${sc}88"></div>
       <div class="meta">
         <div class="name">${r.name}</div>
         <div class="readings">
