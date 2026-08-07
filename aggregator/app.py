@@ -38,6 +38,16 @@ NEWS_FEEDS = {
     "mundodeportivo": "https://www.mundodeportivo.com/rss/portada.xml",
     "elespanol": "https://www.elespanol.com/rss",
     "xataka": "https://feeds.weblogssl.com/xataka2",
+    "google": "https://news.google.com/rss?hl=es&gl=ES&ceid=ES:es",
+}
+# Nombres visibles por feed (fallback cuando un item no trae <source> propio)
+FEED_LABELS = {
+    "marca": "MARCA",
+    "mundodeportivo": "Mundo Deportivo",
+    "elespanol": "El Español",
+    "xataka": "Xataka",
+    "besoccer": "BeSoccer",
+    "google": "Google Noticias",
 }
 # Besoccer no tiene RSS — se scrapea (ver fetch_besoccer)
 BESOCCER_URL = "https://es.besoccer.com/noticias"
@@ -93,8 +103,16 @@ def fetch_rss(url, limit=5):
         for item in channel.findall("item"):
             title = (item.findtext("title") or "").strip()
             link = (item.findtext("link") or "").strip()
+            # Google News pone el medio en <source> y lo repite como sufijo
+            # del título ("Noticia - El País"). Lo extraemos como provider.
+            source_el = item.find("source")
+            provider = (source_el.text or "").strip() if source_el is not None else ""
+            if provider:
+                suffix = " - " + provider
+                if title.endswith(suffix):
+                    title = title[: -len(suffix)]
             if title:
-                items.append({"title": html.unescape(title), "link": link})
+                items.append({"title": html.unescape(title), "link": link, "provider": provider})
             if len(items) >= limit:
                 break
     else:
@@ -102,8 +120,14 @@ def fetch_rss(url, limit=5):
             title = (entry.findtext("{http://www.w3.org/2005/Atom}title") or "").strip()
             link_el = entry.find("{http://www.w3.org/2005/Atom}link")
             link = link_el.get("href", "") if link_el is not None else ""
+            source_el = entry.find("{http://www.w3.org/2005/Atom}source/{http://www.w3.org/2005/Atom}title")
+            provider = (source_el.text or "").strip() if source_el is not None else ""
+            if provider:
+                suffix = " - " + provider
+                if title.endswith(suffix):
+                    title = title[: -len(suffix)]
             if title:
-                items.append({"title": html.unescape(title), "link": link})
+                items.append({"title": html.unescape(title), "link": link, "provider": provider})
             if len(items) >= limit:
                 break
     return items
@@ -159,13 +183,21 @@ def get_news():
     result = {}
     for name, url in NEWS_FEEDS.items():
         try:
-            result[name] = fetch_rss(url, MAX_ITEMS_PER_FEED)
+            items = fetch_rss(url, MAX_ITEMS_PER_FEED)
         except Exception as e:
-            result[name] = [{"title": f"⚠️ Error feed {name}: {e}", "link": ""}]
+            items = [{"title": f"⚠️ Error feed {name}: {e}", "link": ""}]
+        for it in items:
+            if not it.get("provider"):
+                it["provider"] = FEED_LABELS.get(name, name)
+        result[name] = items
     try:
-        result["besoccer"] = fetch_besoccer(BESOCCER_URL, MAX_ITEMS_PER_FEED)
+        items = fetch_besoccer(BESOCCER_URL, MAX_ITEMS_PER_FEED)
     except Exception as e:
-        result["besoccer"] = [{"title": f"⚠️ Error besoccer: {e}", "link": ""}]
+        items = [{"title": f"⚠️ Error besoccer: {e}", "link": ""}]
+    for it in items:
+        if not it.get("provider"):
+            it["provider"] = FEED_LABELS.get("besoccer", "BeSoccer")
+    result["besoccer"] = items
 
     with _lock:
         _cache["news"] = result

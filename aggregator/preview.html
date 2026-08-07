@@ -604,6 +604,16 @@
     opacity: 0.9;
     filter: brightness(0.9) contrast(1.1);
   }
+  .news-item .src-name {
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 120px;
+  }
   .news-item .src::before {
     content: "";
     width: 5px; height: 5px;
@@ -616,6 +626,7 @@
   .news-item .src.mundodeportivo::before { background: #5b8cff; }
   .news-item .src.elespanol::before { background: #ffd166; }
   .news-item .src.xataka::before { background: #9b5cff; }
+  .news-item .src.google::before { background: #66a3ff; }
   .news-item .txt { font-size: 12.5px; line-height: 1.45; color: var(--text); }
 
   /* ---------- dock / paginación ---------- */
@@ -943,7 +954,9 @@ function renderChart() {
     ctx.fillText(val.toFixed(1), pad.l - 4, y + 3);
   }
   // etiquetas de hora (0h, 12h, 24h aprox)
-  const COLORS = ["#4dd7ff", "#38bdf8", "#4ade80"];
+  // Paleta por sensor — misma que en el firmware (dovebox_dashboard.cc):
+  // cian, verde, amarillo, naranja, morado, rojo, azul
+  const COLORS = ["#4dd7ff", "#4ade80", "#ffd166", "#ff7a45", "#9b5cff", "#ff5252", "#38bdf8"];
   rooms.forEach((r, ri) => {
     const n = r.history.length;
     const color = COLORS[ri % COLORS.length];
@@ -1005,7 +1018,7 @@ function renderTodo() {
 }
 
 /* ---------- render: news ---------- */
-const SRC_LABEL = { marca:"Marca", mundodeportivo:"Mundo Dep.", elespanol:"El Español", xataka:"Xataka", besoccer:"BeSoccer" };
+const SRC_LABEL = { marca:"Marca", mundodeportivo:"Mundo Dep.", elespanol:"El Español", xataka:"Xataka", besoccer:"BeSoccer", google:"Google Noticias" };
 function renderNews() {
   const el = $("#news-list");
   if (!state.news || !state.news.feeds) {
@@ -1013,11 +1026,11 @@ function renderNews() {
     return;
   }
   const feeds = state.news.feeds;
-  const order = ["marca", "besoccer", "mundodeportivo", "elespanol", "xataka"];
+  const order = ["marca", "besoccer", "mundodeportivo", "elespanol", "xataka", "google"];
   // round-robin: intercala 1 item de cada fuente para que nunca haya
   // dos titulares del mismo proveedor seguidos
   const perSource = {};
-  for (const k of order) perSource[k] = (feeds[k] || []).map(i => ({ src: k, title: i.title, link: i.link }));
+  for (const k of order) perSource[k] = (feeds[k] || []).map(i => ({ src: k, title: i.title, link: i.link, provider: i.provider || SRC_LABEL[k] || k }));
   const items = [];
   let added = true;
   while (added) {
@@ -1031,7 +1044,7 @@ function renderNews() {
   }
   el.innerHTML = items.map(i => `
     <div class="news-item" ${i.link ? `onclick="window.open('${i.link}','_blank')" style="cursor:pointer"` : ""}>
-      <div class="src ${i.src}"><img class="src-logo" src="/logos/${i.src}.png" alt="${i.src}" loading="lazy"></div>
+      <div class="src ${i.src}"><img class="src-logo" src="/logos/${i.src}.png" alt="${i.src}" loading="lazy"><span class="src-name">${esc(i.provider)}</span></div>
       <div class="txt">${esc(i.title)}</div>
     </div>`).join("");
 }

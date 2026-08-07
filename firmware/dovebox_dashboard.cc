@@ -64,6 +64,7 @@ static lv_color_t news_color(const char* feed) {
     if (strcmp(feed, "mundodeportivo") == 0) return lv_color_hex(0x5b8cff);
     if (strcmp(feed, "elespanol") == 0) return lv_color_hex(0xffd166);
     if (strcmp(feed, "xataka") == 0) return lv_color_hex(0x9b5cff);
+    if (strcmp(feed, "google") == 0) return lv_color_hex(0x66a3ff);
     return CLR_DIM;
 }
 
@@ -74,6 +75,7 @@ static const char* news_label(const char* feed) {
     if (strcmp(feed, "mundodeportivo") == 0) return "M. Deportivo";
     if (strcmp(feed, "elespanol") == 0) return "El Español";
     if (strcmp(feed, "xataka") == 0) return "Xataka";
+    if (strcmp(feed, "google") == 0) return "Google Noticias";
     return feed;
 }
 
@@ -91,6 +93,7 @@ struct RoomInfo {
 
 struct NewsItem {
     std::string feed;
+    std::string provider;  // nombre visible del medio (para mostrar junto al logo)
     std::string title;
 };
 
@@ -196,6 +199,13 @@ private:
     }
 
     // ---------------- BuildUI ----------------
+    // Un lv_font_t válido SIEMPRE tiene los callbacks de glyph. Los fonts
+    // binarios del asset (LvglCBinFont) pueden quedar con punteros basura →
+    // InstrFetchProhibited en lv_font_get_glyph_width al hacer layout.
+    static bool FontUsable(const lv_font_t* font) {
+        return font != nullptr && font->get_glyph_dsc != nullptr && font->get_glyph_bitmap != nullptr;
+    }
+
     // Fuente del tema con fallback: en SetupUI() el screen puede no tener aún
     // la fuente configurada, y pasar NULL a lv_obj_set_style_text_font deja el
     // label con fuente inválida → crash en lv_font_get_glyph_width al render.
@@ -204,10 +214,11 @@ private:
         if (t) {
             auto* lt = static_cast<LvglTheme*>(t);
             auto tf = lt->text_font();
-            if (tf && tf->font()) return tf->font();
+            const lv_font_t* f = (tf && tf->font()) ? tf->font() : nullptr;
+            if (FontUsable(f)) return f;
         }
         const lv_font_t* f = lv_obj_get_style_text_font(screen_, LV_PART_MAIN);
-        if (f) return f;
+        if (FontUsable(f)) return f;
         return LV_FONT_DEFAULT;
     }
 
@@ -687,9 +698,10 @@ private:
             cJSON* news_j = cJSON_GetObjectItem(root, "news");
             cJSON* feeds = news_j ? cJSON_GetObjectItem(news_j, "feeds") : nullptr;
             if (cJSON_IsObject(feeds)) {
-                static const char* order[] = {"marca", "besoccer", "mundodeportivo", "elespanol", "xataka"};
-                std::vector<std::vector<NewsItem>> by_feed(5);
-                for (int f = 0; f < 5; f++) {
+                static const char* order[] = {"marca", "besoccer", "mundodeportivo", "elespanol", "xataka", "google"};
+                constexpr int kNumFeeds = 6;
+                std::vector<std::vector<NewsItem>> by_feed(kNumFeeds);
+                for (int f = 0; f < kNumFeeds; f++) {
                     cJSON* arr = cJSON_GetObjectItem(feeds, order[f]);
                     if (cJSON_IsArray(arr)) {
                         cJSON* it;
@@ -698,6 +710,8 @@ private:
                             if (cJSON_IsString(title)) {
                                 NewsItem n;
                                 n.feed = order[f];
+                                cJSON* prov = cJSON_GetObjectItem(it, "provider");
+                                if (cJSON_IsString(prov)) n.provider = prov->valuestring;
                                 n.title = title->valuestring;
                                 by_feed[f].push_back(n);
                             }
@@ -707,7 +721,7 @@ private:
                 size_t max_items = 0;
                 for (auto& v : by_feed) if (v.size() > max_items) max_items = v.size();
                 for (size_t i = 0; i < max_items; i++) {
-                    for (int f = 0; f < 5; f++) {
+                    for (int f = 0; f < kNumFeeds; f++) {
                         if (i < by_feed[f].size()) news.push_back(by_feed[f][i]);
                     }
                 }
@@ -833,12 +847,24 @@ private:
             lv_obj_set_style_bg_opa(chart, LV_OPA_TRANSP, LV_PART_MAIN);
 
             int room_idx = 0;
+            // Paleta fija por sensor: cada habitación con su propio color para
+            // distinguir las series en la gráfica.
+            static const lv_color_t kSeriesColors[] = {
+                CLR_CIAN,       // 0
+                lv_color_hex(0x4ade80),  // verde
+                lv_color_hex(0xffd166),  // amarillo
+                lv_color_hex(0xff7a45),  // naranja
+                lv_color_hex(0x9b5cff),  // morado
+                lv_color_hex(0xff5252),  // rojo
+                lv_color_hex(0x38bdf8),  // azul claro
+            };
+            constexpr size_t kNumColors = sizeof(kSeriesColors) / sizeof(kSeriesColors[0]);
             for (auto& r : g_rooms) {
                 if (r.history.size() < 2) continue;
                 std::vector<int32_t> values;
                 values.reserve(r.history.size());
                 for (float v : r.history) values.push_back((int32_t)(v * 10.0f));
-                lv_color_t sc = (room_idx == 0) ? CLR_CIAN : CLR_SKY;
+                lv_color_t sc = kSeriesColors[room_idx % kNumColors];
                 lv_chart_series_t* ser = lv_chart_add_series(chart, sc, LV_CHART_AXIS_PRIMARY_Y);
                 lv_obj_set_style_line_width(chart, 2, LV_PART_ITEMS);
                 lv_obj_set_style_size(chart, 2, 2, LV_PART_INDICATOR);
@@ -944,13 +970,22 @@ private:
                 lv_obj_align(dot, LV_ALIGN_TOP_LEFT, 12, 14);
             }
 
+            // Nombre del proveedor junto al logo (dato del agregador o
+            // fallback por feed)
+            const char* provider = n.provider.empty() ? news_label(n.feed.c_str()) : n.provider.c_str();
+            lv_obj_t* prov = lv_label_create(row);
+            lv_label_set_text(prov, provider);
+            lv_obj_set_style_text_color(prov, CLR_DIM, 0);
+            lv_obj_set_style_text_font(prov, font, 0);
+            lv_obj_align(prov, LV_ALIGN_TOP_LEFT, 56, 8);
+
             lv_obj_t* title = lv_label_create(row);
             lv_label_set_text(title, n.title.c_str());
             lv_label_set_long_mode(title, LV_LABEL_LONG_WRAP);
             lv_obj_set_width(title, 368);
             lv_obj_set_style_text_color(title, CLR_TEXT, 0);
             lv_obj_set_style_text_font(title, font, 0);
-            lv_obj_align(title, LV_ALIGN_TOP_LEFT, 56, 12);
+            lv_obj_align(title, LV_ALIGN_TOP_LEFT, 56, 30);
         }
     }
 };
