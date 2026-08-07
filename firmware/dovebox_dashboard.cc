@@ -430,13 +430,28 @@ private:
             lv_obj_set_style_bg_color(dot, CLR_FAINT, 0);
             lv_obj_set_style_border_width(dot, 0, 0);
             lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
+            // Tap en un punto → ir a esa vista directamente (evento nativo
+            // LVGL, el mismo mecanismo que funciona en los rows del todo)
+            lv_obj_set_user_data(dot, (void*)(uintptr_t)i);
+            lv_obj_add_event_cb(dot, DotTapCb, LV_EVENT_CLICKED, this);
             dots_[i] = dot;
+        }
+    }
+
+    static void DotTapCb(lv_event_t* e) {
+        auto* self = static_cast<DoveboxDashboard*>(lv_event_get_user_data(e));
+        lv_obj_t* dot = static_cast<lv_obj_t*>(lv_event_get_target(e));
+        int idx = (int)(intptr_t)lv_obj_get_user_data(dot);
+        if (self && idx >= 0 && idx < NUM_VIEWS) {
+            self->ShowView(idx);
         }
     }
 
     void ShowView(int idx) {
         if (idx < 0 || idx >= NUM_VIEWS) return;
         current_view_ = idx;
+        // Interacción del usuario → el auto-cycle espera 12s desde ahora
+        if (auto_cycle_timer_) lv_timer_reset(auto_cycle_timer_);
         for (int i = 0; i < NUM_VIEWS; i++) {
             if (views_[i]) {
                 if (i == idx) lv_obj_remove_flag(views_[i], LV_OBJ_FLAG_HIDDEN);
@@ -518,35 +533,40 @@ private:
     }
 
     // ---------------- Cara (ojos) ----------------
-    // Parpadeo DETERMINISTA (fix 2026-08-07): las animaciones lv_anim con
-    // ready_cb se quedaban achatadas si la vista se ocultaba a mitad del
-    // parpadeo (el callback nunca llegaba y blink_busy_ quedaba a true).
-    // Ahora es una máquina de estados por tiempo: SIEMPRE restaura al 100%
-    // tras 90ms, pase lo que pase. Mismo comportamiento que el preview.
+    // Parpadeo DETERMINISTA y AUTO-SANADOR (fix 2026-08-07 v10):
+    // - Máquina de estados por tiempo: SIEMPRE restaura a escala 100 al
+    //   terminar (nada de callbacks que puedan perderse).
+    // - En reposo, cada tick FUERZA escala 100: aunque cualquier otra cosa
+    //   dejara los ojos achatados, se corrigen solos en ≤100ms.
+    // - Duración 260ms (con el timer de 100ms se ven ~2-3 frames = parpadeo
+    //   visible y suave, igual que el preview).
     void UpdateEyes() {
         if (!eye_left_) return;
         int now_ms = lv_tick_get();
 
         if (blink_start_ms_ < 0) {
+            // Self-healing: en reposo los ojos SIEMPRE a escala 100
+            lv_obj_set_style_transform_scale_y(eye_left_, 100, 0);
+            lv_obj_set_style_transform_scale_y(eye_right_, 100, 0);
             if (now_ms - last_blink_ms_ < 2500 + (rand() % 3500)) return;
             last_blink_ms_ = now_ms;
             blink_start_ms_ = now_ms;
         }
 
         int dt = now_ms - blink_start_ms_;
-        if (dt >= 90) {
+        if (dt >= 260) {
             lv_obj_set_style_transform_scale_y(eye_left_, 100, 0);
             lv_obj_set_style_transform_scale_y(eye_right_, 100, 0);
             blink_start_ms_ = -1;
             return;
         }
 
-        // Cerrar 0-45ms (100→10), abrir 45-90ms (10→100)
+        // Cerrar 0-130ms (100→10), abrir 130-260ms (10→100)
         int32_t v;
-        if (dt < 45) {
-            v = 100 - (int32_t)(90 * dt / 45);
+        if (dt < 130) {
+            v = 100 - (int32_t)(90 * dt / 130);
         } else {
-            v = 10 + (int32_t)(90 * (dt - 45) / 45);
+            v = 10 + (int32_t)(90 * (dt - 130) / 130);
         }
         lv_obj_set_style_transform_pivot_y(eye_left_, lv_pct(50), 0);
         lv_obj_set_style_transform_pivot_y(eye_right_, lv_pct(50), 0);
@@ -554,10 +574,16 @@ private:
         lv_obj_set_style_transform_scale_y(eye_right_, v, 0);
     }
 
-    // Polling de gestos desde el timer del reloj (más fiable que eventos,
-    // que solo burbujean si los objetos tienen LV_OBJ_FLAG_EVENT_BUBBLE).
+    // Polling de gestos desde el timer del reloj. ⚠️ NO usar
+    // lv_indev_active(): fuera del contexto de un evento devuelve NULL →
+    // swipe/tap muertos en el dispositivo. lv_indev_get_next(NULL) devuelve
+    // el primer indev registrado (el táctil) con su estado real.
     void UpdateGestures() {
-        lv_indev_t* indev = lv_indev_active();
+        // Buscar el indev táctil (POINTER): el primero puede ser un botón
+        lv_indev_t* indev = lv_indev_get_next(nullptr);
+        while (indev && lv_indev_get_type(indev) != LV_INDEV_TYPE_POINTER) {
+            indev = lv_indev_get_next(indev);
+        }
         if (!indev) return;
         lv_point_t p;
         lv_indev_get_point(indev, &p);
