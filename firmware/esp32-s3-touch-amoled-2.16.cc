@@ -14,10 +14,16 @@
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
+#include <esp_timer.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
 #include "esp_io_expander_tca9554.h"
 #include "settings.h"
+
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+#include <cmath>
 
 #include <esp_lcd_touch_cst9217.h>
 #include <esp_lvgl_port.h>
@@ -27,6 +33,13 @@
 
 // Factory del dashboard DoveBox (Pieza B, definido en dovebox_dashboard.cc)
 extern "C" void* dovebox_dashboard_create(void* display, void* screen);
+// Notificación de emoción del servidor → la cara reacciona (Opción B)
+extern "C" void dovebox_dashboard_on_emotion(const char* emotion);
+// Notificación de mensaje de chat (user/assistant) → label de estado en la cara
+extern "C" void dovebox_dashboard_on_chat_message(const char* role, const char* content);
+// Evento del giroscopio (QMI8658): "shake" / "bottom_up" / "top_up" → la cara
+// reacciona (sobresalto / dormirse / despertar)
+extern "C" void dovebox_dashboard_on_imu(const char* event);
 
 class Pmic : public Axp2101 {
 public:
@@ -60,6 +73,42 @@ public:
 #define LCD_OPCODE_WRITE_CMD (0x02ULL)
 #define LCD_OPCODE_READ_CMD (0x03ULL)
 #define LCD_OPCODE_WRITE_COLOR (0x32ULL)
+
+// QMI8658: IMU de 6 ejes (acelerómetro + giroscopio) de la placa. Driver
+// mínimo sobre el bus I2C existente (mismo I2C_NUM_0 que PMIC/touch/códec).
+// Registros clave (datasheet QMI8658A + driver de Waveshare/SensorLib):
+//   0x00 WHO_AM_I = 0x05 · 0x60 RESET = 0xB0 · 0x4D RST_RESULT = 0x80
+//   0x02 CTRL1 bit6 = ADDR_AI (auto-increment) → 0x40
+//   0x03 CTRL2 bits[6:4]=aFS (±4g=001) bits[3:0]=AODR (500Hz=0100) → 0x14
+//   0x08 CTRL7 bit0=A_EN bit1=G_EN → 0x03
+//   0x35..0x3A = AX_L..AZ_H (int16 little-endian, 4096 LSB/g a ±4g)
+class Imu8658 : public I2cDevice {
+public:
+    Imu8658(i2c_master_bus_handle_t i2c_bus, uint8_t addr) : I2cDevice(i2c_bus, addr) {}
+
+    bool Init() {
+        if (ReadReg(0x00) != 0x05) return false;   // WHO_AM_I
+        WriteReg(0x60, 0xB0);                      // soft reset
+        vTaskDelay(pdMS_TO_TICKS(20));
+        WriteReg(0x02, 0x40);                      // ADDR_AI (ráfaga de lectura)
+        WriteReg(0x03, 0x14);                      // accel ±4g @ 500Hz
+        WriteReg(0x08, 0x03);                      // accel + gyro enable
+        return true;
+    }
+
+    // Aceleración en g (convención: +g hacia abajo)
+    bool ReadAccel(float& ax, float& ay, float& az) {
+        uint8_t buf[6];
+        ReadRegs(0x35, buf, 6);
+        int16_t rx = (int16_t)((buf[1] << 8) | buf[0]);
+        int16_t ry = (int16_t)((buf[3] << 8) | buf[2]);
+        int16_t rz = (int16_t)((buf[5] << 8) | buf[4]);
+        ax = rx / 4096.0f;
+        ay = ry / 4096.0f;
+        az = rz / 4096.0f;
+        return true;
+    }
+};
 
 static const co5300_lcd_init_cmd_t vendor_specific_init[] = {
     {0x11, (uint8_t[]){0x00}, 0, 600}, // Sleep out
@@ -127,6 +176,21 @@ public:
         // Pieza B: panel DoveBox (5 vistas swipe, polling al agregador)
         dovebox_dashboard_create(this, lv_screen_active());
     }
+
+    // Opción B: las emociones del servidor (llm emotion) van al dashboard para
+    // que la cara de DoveBox las represente. El SetEmotion() base sigue
+    // ejecutándose (emoji stock) pero la vista Face tapa la zona central.
+    virtual void SetEmotion(const char* emotion) override {
+        dovebox_dashboard_on_emotion(emotion);
+        LcdDisplay::SetEmotion(emotion);
+    }
+
+    // Mensajes de chat (stt user / llm assistant) → label de estado de la cara
+    // ("escuchando…", texto transcrito, respuesta del asistente).
+    virtual void SetChatMessage(const char* role, const char* content) override {
+        dovebox_dashboard_on_chat_message(role, content);
+        LcdDisplay::SetChatMessage(role, content);
+    }
 };
 
 class CustomBacklight : public Backlight {
@@ -157,6 +221,94 @@ private:
     CustomBacklight* backlight_;
     esp_io_expander_handle_t io_expander = NULL;
     PowerSaveTimer* power_save_timer_;
+
+    // IMU (QMI8658): acelerómetro + giroscopio
+    Imu8658* imu_ = nullptr;
+    bool imu_ok_ = false;
+    float imu_baseline_az_ = 1.0f;  // gravedad Z de reposo (g)
+    bool imu_baseline_set_ = false;
+    int imu_shake_hits_ = 0;
+    int64_t imu_shake_window_ms_ = 0;
+    int64_t imu_last_event_ms_ = 0;
+
+    void InitializeImu() {
+        // QMI8658 a 0x6B (ADDR=L, default), fallback 0x6A (ADDR=H)
+        const uint8_t kAddrs[] = {0x6B, 0x6A};
+        for (uint8_t addr : kAddrs) {
+            auto* imu = new Imu8658(i2c_bus_, addr);
+            if (imu->Init()) {
+                imu_ = imu;
+                imu_ok_ = true;
+                ESP_LOGI(TAG, "QMI8658 init OK (addr 0x%02X)", addr);
+                break;
+            }
+            delete imu;
+        }
+        if (!imu_ok_) {
+            ESP_LOGE(TAG, "QMI8658 no encontrado — reacciones de giroscopio desactivadas");
+            return;
+        }
+        xTaskCreate(ImuTask, "dovebox_imu", 4096, this, 5, nullptr);
+        ESP_LOGI(TAG, "IMU task creado (shake / boca abajo → dashboard)");
+    }
+
+    // Lee el acelerómetro (~25 Hz) y detecta gestos: shake (3 picos de
+    // magnitud en 1.5s) y orientación (boca abajo = gravedad Z con signo
+    // opuesto al reposo). Los eventos van al dashboard vía
+    // dovebox_dashboard_on_imu() — el dashboard los aplica en el hilo LVGL.
+    void ImuLoop() {
+        if (!imu_ || !imu_ok_) return;
+        float ax, ay, az;
+        if (!imu_->ReadAccel(ax, ay, az)) return;
+
+        float mag = sqrtf(ax * ax + ay * ay + az * az);
+        int64_t now_ms = esp_timer_get_time() / 1000;
+
+        // Orientación: el eje dominante es Z cuando el dispositivo está
+        // apoyado plano. El signo de la gravedad en Z define cara arriba/abajo.
+        if (!imu_baseline_set_ && mag > 0.7f && mag < 1.3f) {
+            imu_baseline_az_ = az;
+            imu_baseline_set_ = true;
+        }
+        if (imu_baseline_set_ && fabsf(az) > 0.6f &&
+            fabsf(az) > fabsf(ax) && fabsf(az) > fabsf(ay)) {
+            if (now_ms - imu_last_event_ms_ > 2000 && az * imu_baseline_az_ < 0.0f) {
+                imu_last_event_ms_ = now_ms;
+                if (az < 0.0f) {
+                    ESP_LOGI(TAG, "IMU: boca abajo → a dormir");
+                    dovebox_dashboard_on_imu("bottom_up");
+                } else {
+                    ESP_LOGI(TAG, "IMU: boca arriba → despierto");
+                    dovebox_dashboard_on_imu("top_up");
+                }
+            }
+        }
+
+        // Shake: picos de |magnitud − 1g| > 0.9g, 3 en 1.5s
+        float dev = fabsf(mag - 1.0f);
+        if (dev > 0.9f) {
+            if (imu_shake_window_ms_ == 0) imu_shake_window_ms_ = now_ms;
+            imu_shake_hits_++;
+        } else if (now_ms - imu_shake_window_ms_ > 1500) {
+            imu_shake_hits_ = 0;
+            imu_shake_window_ms_ = 0;
+        }
+        if (imu_shake_hits_ >= 3 && now_ms - imu_last_event_ms_ > 2000) {
+            imu_shake_hits_ = 0;
+            imu_shake_window_ms_ = 0;
+            imu_last_event_ms_ = now_ms;
+            ESP_LOGI(TAG, "IMU: shake → sobresalto");
+            dovebox_dashboard_on_imu("shake");
+        }
+    }
+
+    static void ImuTask(void* arg) {
+        auto* self = static_cast<WaveshareEsp32s3TouchAMOLED2inch16*>(arg);
+        while (true) {
+            self->ImuLoop();
+            vTaskDelay(pdMS_TO_TICKS(40));
+        }
+    }
 
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
@@ -286,8 +438,8 @@ private:
             },
             .flags = {
                 .swap_xy = 0,
-                .mirror_x = 1,
-                .mirror_y = 1,
+                .mirror_x = 0,
+                .mirror_y = 0,
             },
         };
         esp_lcd_panel_io_handle_t tp_io_handle = NULL;
@@ -327,6 +479,7 @@ public:
         InitializeSpi();
         InitializeDisplay();
         InitializeTouch();
+        InitializeImu();
         InitializeButtons();
         InitializeTools();
     }
@@ -376,6 +529,23 @@ public:
         }
         WifiBoard::SetPowerSaveLevel(level);
     }
+
+    // Despierta el hardware: sale del power-save (pantalla) y resetea el
+    // timer de reposo de 60s. Lo invoca el dashboard en cualquier toque
+    // (dovebox_board_wake_screen) para que un tap despierto al DoveBox.
+    void WakeScreen() {
+        power_save_timer_->WakeUp();
+        GetDisplay()->SetPowerSaveMode(false);
+        GetBacklight()->RestoreBrightness();
+    }
 };
 
 DECLARE_BOARD(WaveshareEsp32s3TouchAMOLED2inch16);
+
+// Wake del hardware desde el dashboard (tap del usuario). Definido aquí para
+// no exponer la clase completa; el dashboard lo declara extern "C".
+extern "C" void dovebox_board_wake_screen(void) {
+    auto& board = Board::GetInstance();
+    auto* wb = dynamic_cast<WaveshareEsp32s3TouchAMOLED2inch16*>(&board);
+    if (wb) wb->WakeScreen();
+}

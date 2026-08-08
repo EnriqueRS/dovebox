@@ -27,13 +27,31 @@
 #include <vector>
 #include <cmath>
 
+// Versión del firmware en runtime (solo dispositivo; el sim no tiene esp_app_desc)
+#ifdef ESP_PLATFORM
+#include "esp_app_desc.h"
+#endif
+
 // Logo embebido del proveedor (dovebox_logos.cc, generado por gen_logos.py)
 const lv_image_dsc_t* dovebox_logo(const char* feed);
+
+// Despierta el hardware (salir de power-save y resetear el timer de reposo).
+// Lo define el board (esp32-s3-touch-amoled-2.16.cc) y el simulador (main.cc).
+extern "C" void dovebox_board_wake_screen(void);
 
 // Font grande para el reloj (30px base → 240% = ~72px, como el preview)
 LV_FONT_DECLARE(font_noto_sans_basic_30_4);
 
 #define TAG "DoveboxDashboard"
+
+// Versión corta para la esquina inferior derecha ("v2.4.8")
+static const char* dovebox_fw_version() {
+#ifdef ESP_PLATFORM
+    return esp_app_get_description()->version;
+#else
+    return "SIM";
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // Design tokens (aprobados por Quique, 2026-08-06)
@@ -54,7 +72,7 @@ LV_FONT_DECLARE(font_noto_sans_basic_30_4);
 #define AGGREGATOR_PORT 18100
 #define POLL_INTERVAL_MS 60000
 #define CLOCK_TICK_MS 100
-#define SWIPE_THRESHOLD 50
+#define SWIPE_THRESHOLD 35
 #define NUM_VIEWS 5
 
 #define STR_HELPER(x) #x
@@ -139,6 +157,23 @@ public:
     static void PollTickCb(lv_timer_t* t);
     static void AutoCycleCb(lv_timer_t* t);
 
+    // Opción B: notificación de emoción (la llama dovebox_dashboard_on_emotion
+    // extern, que a su vez llama el board desde SetEmotion)
+    static void NotifyEmotion(const char* emotion) {
+        if (s_instance_) s_instance_->OnEmotion(emotion);
+    }
+
+    // Mensaje de chat (user/assistant) → label de estado de la cara
+    static void NotifyChatMessage(const char* role, const char* content) {
+        if (s_instance_) s_instance_->OnChatMessage(role, content);
+    }
+
+    // Evento del giroscopio (QMI8658): "shake" / "bottom_up" / "top_up".
+    // Lo detecta el task de IMU del board y se aplica en el hilo LVGL.
+    static void NotifyImu(const char* event) {
+        if (s_instance_) s_instance_->OnImu(event);
+    }
+
 private:
     LcdDisplay* display_;
     lv_obj_t* screen_;
@@ -157,9 +192,60 @@ private:
     lv_obj_t* pupil_right_ = nullptr;
     lv_obj_t* lid_left_ = nullptr;
     lv_obj_t* lid_right_ = nullptr;
+    lv_obj_t* brow_left_ = nullptr;
+    lv_obj_t* brow_right_ = nullptr;
+    lv_obj_t* mouth_ = nullptr;
+    lv_obj_t* mouth_arc_ = nullptr;  // boca curva (sonrisa/triste/O) para emociones
     lv_obj_t* face_time_ = nullptr;
+    // Contenedor de la cara: agrupa ojos/cejas/boca para la respiración
+    lv_obj_t* face_group_ = nullptr;
     int last_blink_ms_ = 0;
     int blink_start_ms_ = -1;  // -1 = sin parpadeo activo (máquina de estados)
+    bool blink_double_pending_ = false;  // parpadeo doble natural (~12%)
+    // Expresiones animadas (cejas + boca): misma máquina de estados por tiempo
+    int last_expr_ms_ = 0;
+    int expr_start_ms_ = -1;   // -1 = sin expresión activa
+    int expr_duration_ = 0;
+    // Micro-saccades: mirada errante en reposo (solo vista face, sin emoción)
+    int saccade_next_ms_ = 0;
+    int saccade_start_ms_ = -1;   // -1 = sin saccade activa
+    int saccade_tx_ = 0, saccade_ty_ = 0;
+    int saccade_hold_end_ms_ = 0;
+    bool saccade_returning_ = false;
+    int saccade_return_start_ = 0;
+    // Respiración: ciclo vertical lento del grupo de la cara (~4s)
+    int breath_phase_ms_ = 0;
+
+    // Opción B: emoción actual del servidor + flag para aplicarla en el hilo LVGL
+    std::string current_emotion_;
+    volatile bool emotion_dirty_ = false;
+
+    // Mensajes de chat (user/assistant) → label de estado bajo la cara
+    lv_obj_t* chat_label_ = nullptr;
+    std::string chat_role_;
+    std::string chat_text_;
+    volatile bool chat_dirty_ = false;
+    bool lip_active_ = false;   // lip sync activo (estado Speaking)
+    int lip_phase_ms_ = 0;      // fase acumulada para la onda de la boca
+
+    // Dormir (emoción sleepy): zzz flotantes + boca de ronquido
+    lv_obj_t* sleep_zzz_[3] = {nullptr, nullptr, nullptr};
+    lv_obj_t* snore_mouth_ = nullptr;  // círculo de ronquido (cambia de tamaño)
+    int zzz_phase_ms_ = 0;
+    bool snore_active_ = false;
+    float snore_phase_ = 0.0f;
+
+    // Sobresalto: pose breve de sorpresa al despertar (tap) o con un shake
+    int startle_start_ms_ = -1;  // -1 = sin sobresalto activo
+
+    // Esquinas inferiores: batería (izquierda) y versión (derecha)
+    lv_obj_t* battery_label_ = nullptr;
+    lv_obj_t* version_label_ = nullptr;
+    int battery_tick_ = 0;   // cada 100 ticks (~10s) se refresca la batería
+
+    // IMU (giroscopio): evento pendiente del board + flag para hilo LVGL
+    std::string imu_event_;
+    volatile bool imu_dirty_ = false;
 
     // Clock
     lv_obj_t* clock_time_ = nullptr;
@@ -178,6 +264,7 @@ private:
 
     // Gestos
     lv_point_t press_start_ = {0, 0};
+    int press_start_ms_ = 0;   // tick del press (para distinguir tap de swipe)
     bool pressed_ = false;
 
     // Datos
@@ -252,14 +339,57 @@ private:
         views_[3] = BuildTodo(theme_font);
         views_[4] = BuildNews(theme_font);
         BuildDots();
+        BuildCornerLabels(theme_font);
         ShowView(0);
+    }
+
+    // Esquinas inferiores: batería (abajo-izquierda) y versión (abajo-derecha).
+    // Se crean en screen_ (fuera de las vistas) → visibles SIEMPRE, en todas
+    // las pantallas y también durante el chat.
+    void BuildCornerLabels(const lv_font_t* font) {
+        battery_label_ = MakeLabel(screen_, "--%", CLR_DIM, font);
+        lv_obj_align(battery_label_, LV_ALIGN_BOTTOM_LEFT, 16, -10);
+        lv_obj_set_style_text_opa(battery_label_, LV_OPA_70, 0);
+
+        char vbuf[24];
+        snprintf(vbuf, sizeof(vbuf), "v%s", dovebox_fw_version());
+        version_label_ = MakeLabel(screen_, vbuf, CLR_FAINT, font);
+        lv_obj_align(version_label_, LV_ALIGN_BOTTOM_RIGHT, -16, -10);
+        lv_obj_set_style_text_opa(version_label_, LV_OPA_70, 0);
+    }
+
+    // Batería: un ReadReg del PMIC (AXP2101) cada ~10s. Verde si está
+    // cargando, naranja si está por debajo del 15%.
+    void UpdateBattery() {
+        if (!battery_label_) return;
+        int level = -1;
+        bool charging = false, discharging = false;
+        auto& board = Board::GetInstance();
+        if (!board.GetBatteryLevel(level, charging, discharging) || level < 0) return;
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%d%%", level);
+        lv_label_set_text(battery_label_, buf);
+        lv_color_t c = CLR_DIM;
+        if (charging) c = CLR_MINT;
+        else if (level <= 15) c = lv_color_hex(0xff7a45);
+        lv_obj_set_style_text_color(battery_label_, c, 0);
     }
 
     lv_obj_t* BuildFace(const lv_font_t* font) {
         lv_obj_t* v = MakeView();
+        // Grupo de respiración: agrupa ojos+cejas+boca+párpados para poder
+        // moverlos juntos (ciclo vertical lento = respiración). El nombre, la
+        // hora y el label de chat quedan FUERA (texto fijo, no respira).
+        face_group_ = lv_obj_create(v);
+        lv_obj_set_size(face_group_, 480, 480);
+        lv_obj_set_pos(face_group_, 0, 0);
+        lv_obj_set_style_bg_opa(face_group_, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(face_group_, 0, 0);
+        lv_obj_set_style_pad_all(face_group_, 0, 0);
+        lv_obj_clear_flag(face_group_, LV_OBJ_FLAG_SCROLLABLE);
         // Ojos estilo preview (validado por Quique 2026-08-07):
         // elípticos, fondo oscuro con borde cian, pupila cian brillante con destello.
-        eye_left_ = lv_obj_create(v);
+        eye_left_ = lv_obj_create(face_group_);
         lv_obj_set_size(eye_left_, 104, 126);
         lv_obj_set_style_radius(eye_left_, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(eye_left_, lv_color_hex(0x0a0f14), 0);
@@ -270,9 +400,9 @@ private:
         lv_obj_set_style_shadow_width(eye_left_, 22, 0);
         lv_obj_set_style_shadow_spread(eye_left_, 2, 0);
         lv_obj_set_style_pad_all(eye_left_, 0, 0);
-        lv_obj_align(eye_left_, LV_ALIGN_CENTER, -64, -46);
+        lv_obj_align(eye_left_, LV_ALIGN_CENTER, -64, -30);
 
-        eye_right_ = lv_obj_create(v);
+        eye_right_ = lv_obj_create(face_group_);
         lv_obj_set_size(eye_right_, 104, 126);
         lv_obj_set_style_radius(eye_right_, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(eye_right_, lv_color_hex(0x0a0f14), 0);
@@ -283,7 +413,7 @@ private:
         lv_obj_set_style_shadow_width(eye_right_, 22, 0);
         lv_obj_set_style_shadow_spread(eye_right_, 2, 0);
         lv_obj_set_style_pad_all(eye_right_, 0, 0);
-        lv_obj_align(eye_right_, LV_ALIGN_CENTER, 64, -46);
+        lv_obj_align(eye_right_, LV_ALIGN_CENTER, 64, -30);
 
         // Pupila: círculo cian brillante con gradiente (oscuro en la base)
         pupil_left_ = lv_obj_create(eye_left_);
@@ -327,23 +457,105 @@ private:
         lv_obj_set_style_bg_opa(glint_r, LV_OPA_90, 0);
         lv_obj_align(glint_r, LV_ALIGN_TOP_LEFT, 6, 5);
 
+        // Cejas: líneas finas sobre cada ojo (sin rotación, neutras)
+        brow_left_ = lv_obj_create(face_group_);
+        lv_obj_set_size(brow_left_, 48, 4);
+        lv_obj_set_style_radius(brow_left_, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(brow_left_, lv_color_hex(0x2e5f78), 0);
+        lv_obj_set_style_bg_opa(brow_left_, LV_OPA_60, 0);
+        lv_obj_set_style_border_width(brow_left_, 0, 0);
+        lv_obj_align(brow_left_, LV_ALIGN_CENTER, -64, -112);
+
+        brow_right_ = lv_obj_create(face_group_);
+        lv_obj_set_size(brow_right_, 48, 4);
+        lv_obj_set_style_radius(brow_right_, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(brow_right_, lv_color_hex(0x2e5f78), 0);
+        lv_obj_set_style_bg_opa(brow_right_, LV_OPA_60, 0);
+        lv_obj_set_style_border_width(brow_right_, 0, 0);
+        lv_obj_align(brow_right_, LV_ALIGN_CENTER, 64, -112);
+
+        // Boca: línea fina horizontal (estilo minimalista)
+        // SIN shadow: el shadow cian (opa 20, width 8) se solapaba con el del
+        // ojo derecho (width 22, llega hasta y≈297) y creaba un punto gris
+        // justo encima de la boca (bug reportado por Quique 2026-08-08).
+        mouth_ = lv_obj_create(face_group_);
+        lv_obj_set_size(mouth_, 66, 5);
+        lv_obj_set_style_radius(mouth_, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(mouth_, lv_color_hex(0x2e5f78), 0);
+        lv_obj_set_style_bg_opa(mouth_, LV_OPA_70, 0);
+        lv_obj_set_style_border_width(mouth_, 0, 0);
+        lv_obj_align(mouth_, LV_ALIGN_CENTER, 0, 62);
+
+        // Boca curva (lv_arc) para emociones: sonrisa ∪ (0..180), triste ∩
+        // (180..360), O de sorpresa (círculo pequeño). Se muestra/oculta según
+        // la emoción del servidor (Opción B).
+        mouth_arc_ = lv_arc_create(face_group_);
+        lv_obj_set_size(mouth_arc_, 88, 52);
+        lv_arc_set_rotation(mouth_arc_, 0);
+        lv_arc_set_bg_angles(mouth_arc_, 0, 180);
+        lv_arc_set_value(mouth_arc_, 100);
+        lv_arc_set_range(mouth_arc_, 0, 100);
+        lv_obj_remove_style(mouth_arc_, NULL, LV_PART_KNOB);
+        lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_arc_width(mouth_arc_, 6, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x1a2029), LV_PART_MAIN);
+        lv_obj_set_style_arc_width(mouth_arc_, 6, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x4dd7ff), LV_PART_INDICATOR);
+        lv_obj_set_style_arc_opa(mouth_arc_, LV_OPA_COVER, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_rounded(mouth_arc_, true, LV_PART_INDICATOR);
+        lv_obj_align(mouth_arc_, LV_ALIGN_CENTER, 0, 64);
+        lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+
+        // Label de estado del chat: "Escuchando…", texto transcrito o respuesta
+        // del asistente. Se muestra solo durante el chat (lo gestiona
+        // UpdateStateVisibility / UpdateChatState).
+        chat_label_ = lv_label_create(v);
+        lv_label_set_text(chat_label_, "");
+        lv_label_set_long_mode(chat_label_, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(chat_label_, 400);
+        lv_obj_set_style_text_color(chat_label_, CLR_DIM, 0);
+        lv_obj_set_style_text_font(chat_label_, font, 0);
+        lv_obj_set_style_text_align(chat_label_, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(chat_label_, LV_ALIGN_CENTER, 0, 118);
+        lv_obj_add_flag(chat_label_, LV_OBJ_FLAG_HIDDEN);
+
+        // Nombre arriba (antes estaba bajo los ojos)
         lv_obj_t* label = MakeLabel(v, "DoveBox", CLR_DIM, font);
-        lv_obj_align(label, LV_ALIGN_CENTER, 0, 68);
+        lv_obj_align(label, LV_ALIGN_CENTER, 0, -208);
         lv_obj_set_style_text_letter_space(label, 8, 0);
         lv_obj_set_style_text_opa(label, LV_OPA_60, 0);
-        // Hora en la cara (sustituye a "desliza para explorar")
+
+        // Hora en la cara, arriba (antes estaba bajo los ojos)
         face_time_ = lv_label_create(v);
         lv_label_set_text(face_time_, "00:00");
         lv_obj_set_style_text_color(face_time_, CLR_FAINT, 0);
         lv_obj_set_style_text_font(face_time_, &font_noto_sans_basic_30_4, 0);
         lv_obj_set_style_transform_scale_x(face_time_, 120, 0);
         lv_obj_set_style_transform_scale_y(face_time_, 120, 0);
-        lv_obj_align(face_time_, LV_ALIGN_CENTER, 0, 96);
+        lv_obj_align(face_time_, LV_ALIGN_CENTER, 0, -160);
 
-        // Párpados: overlay negro/cian exactamente sobre cada ojo. El parpadeo
-        // NO escala los ojos (eso dejaba los ojos achatados en v7-v10): solo
-        // muestra/oculta estos párpados. Imposible que se deformen.
-        lid_left_ = lv_obj_create(v);
+        // Zzz de dormir (emoción sleepy): tres "z" a distinta escala, a la
+        // derecha de la cabeza. Los anima UpdateSleep (flotan arriba-derecha
+        // y se desvanecen en bucle).
+        for (int i = 0; i < 3; i++) {
+            sleep_zzz_[i] = lv_label_create(v);
+            lv_label_set_text(sleep_zzz_[i], "z");
+            lv_obj_set_style_text_color(sleep_zzz_[i], lv_color_hex(0x8fd8ff), 0);
+            lv_obj_set_style_text_opa(sleep_zzz_[i], LV_OPA_TRANSP, 0);
+            lv_obj_set_style_text_font(sleep_zzz_[i], &font_noto_sans_basic_30_4, 0);
+            int scale = 110 + i * 45;   // 110, 155, 200
+            lv_obj_set_style_transform_scale_x(sleep_zzz_[i], scale, 0);
+            lv_obj_set_style_transform_scale_y(sleep_zzz_[i], scale, 0);
+            lv_obj_align(sleep_zzz_[i], LV_ALIGN_CENTER, 118 + i * 6, -128 - i * 26);
+            lv_obj_add_flag(sleep_zzz_[i], LV_OBJ_FLAG_HIDDEN);
+        }
+
+        // Párpados: overlay negro/cian exactamente sobre cada ojo (parpadeo
+        // BINARIO original v12 — preferencia de Quique 2026-08-08: "me gusta
+        // más el pestañeo de antes", ni cortinilla ni tapa). El parpadeo solo
+        // muestra/oculta estos párpados (180ms). Los ojos NO se escalan nunca
+        // (pitfall v7-v10 intacto).
+        lid_left_ = lv_obj_create(face_group_);
         lv_obj_set_size(lid_left_, 104, 126);
         lv_obj_set_style_radius(lid_left_, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(lid_left_, lv_color_hex(0x0a0f14), 0);
@@ -354,10 +566,10 @@ private:
         lv_obj_set_style_shadow_width(lid_left_, 22, 0);
         lv_obj_set_style_shadow_spread(lid_left_, 2, 0);
         lv_obj_set_style_pad_all(lid_left_, 0, 0);
-        lv_obj_align(lid_left_, LV_ALIGN_CENTER, -64, -46);
+        lv_obj_align(lid_left_, LV_ALIGN_CENTER, -64, -30);
         lv_obj_add_flag(lid_left_, LV_OBJ_FLAG_HIDDEN);
 
-        lid_right_ = lv_obj_create(v);
+        lid_right_ = lv_obj_create(face_group_);
         lv_obj_set_size(lid_right_, 104, 126);
         lv_obj_set_style_radius(lid_right_, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(lid_right_, lv_color_hex(0x0a0f14), 0);
@@ -368,8 +580,28 @@ private:
         lv_obj_set_style_shadow_width(lid_right_, 22, 0);
         lv_obj_set_style_shadow_spread(lid_right_, 2, 0);
         lv_obj_set_style_pad_all(lid_right_, 0, 0);
-        lv_obj_align(lid_right_, LV_ALIGN_CENTER, 64, -46);
+        lv_obj_align(lid_right_, LV_ALIGN_CENTER, 64, -30);
         lv_obj_add_flag(lid_right_, LV_OBJ_FLAG_HIDDEN);
+
+        // Boca de ronquido (emoción sleepy): CÍRCULO cian que cambia de
+        // tamaño al ritmo del ronquido (pedido 2026-08-08: "un circuito que
+        // cambie de tamaño" — sustituye a la boca-arc entreabierta).
+        snore_mouth_ = lv_arc_create(face_group_);
+        lv_obj_set_size(snore_mouth_, 64, 64);
+        lv_arc_set_rotation(snore_mouth_, 0);
+        lv_arc_set_bg_angles(snore_mouth_, 0, 360);   // círculo completo
+        lv_arc_set_value(snore_mouth_, 100);
+        lv_arc_set_range(snore_mouth_, 0, 100);
+        lv_obj_remove_style(snore_mouth_, NULL, LV_PART_KNOB);
+        lv_obj_remove_flag(snore_mouth_, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_arc_width(snore_mouth_, 6, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(snore_mouth_, lv_color_hex(0x1a2029), LV_PART_MAIN);
+        lv_obj_set_style_arc_width(snore_mouth_, 6, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(snore_mouth_, lv_color_hex(0x4dd7ff), LV_PART_INDICATOR);
+        lv_obj_set_style_arc_opa(snore_mouth_, LV_OPA_COVER, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_rounded(snore_mouth_, true, LV_PART_INDICATOR);
+        lv_obj_align(snore_mouth_, LV_ALIGN_CENTER, 0, 64);
+        lv_obj_add_flag(snore_mouth_, LV_OBJ_FLAG_HIDDEN);
         return v;
     }
 
@@ -393,19 +625,19 @@ private:
         clock_time_ = lv_label_create(v);
         lv_label_set_text(clock_time_, "00:00");
         lv_obj_set_style_text_color(clock_time_, CLR_TEXT, 0);
-        // Font grande (30px) a 240% = ~72px, como el preview (antes usaba el
-        // font del tema, 16px → 38px, se veía muy pequeña)
+        // Font grande (30px) a 430% = ~130px: la hora domina el círculo del
+        // anillo (el usuario la pidió "que ocupe el círculo entero").
         lv_obj_set_style_text_font(clock_time_, &font_noto_sans_basic_30_4, 0);
-        lv_obj_set_style_transform_scale_x(clock_time_, 240, 0);
-        lv_obj_set_style_transform_scale_y(clock_time_, 240, 0);
+        lv_obj_set_style_transform_scale_x(clock_time_, 430, 0);
+        lv_obj_set_style_transform_scale_y(clock_time_, 430, 0);
         lv_obj_set_style_transform_pivot_x(clock_time_, lv_pct(50), 0);
         lv_obj_set_style_transform_pivot_y(clock_time_, lv_pct(50), 0);
-        lv_obj_align(clock_time_, LV_ALIGN_CENTER, 0, -8);
+        lv_obj_align(clock_time_, LV_ALIGN_CENTER, 0, -12);
 
         clock_date_ = MakeLabel(v, "7 agosto 2026", CLR_DIM, font);
-        lv_obj_align(clock_date_, LV_ALIGN_CENTER, 0, 62);
+        lv_obj_align(clock_date_, LV_ALIGN_CENTER, 0, 84);
         clock_dow_ = MakeLabel(v, "viernes", CLR_FAINT, font);
-        lv_obj_align(clock_dow_, LV_ALIGN_CENTER, 0, 96);
+        lv_obj_align(clock_dow_, LV_ALIGN_CENTER, 0, 118);
         return v;
     }
 
@@ -520,9 +752,10 @@ private:
         if (idx == 4) RenderNews();
     }
 
-    // Cuando el chat de voz está activo (escuchando/hablando), ocultamos el
-    // dashboard para que se vea la UI de chat por defecto; al volver a idle
-    // restauramos la vista actual.
+    // Opción B: durante el chat de voz (escuchando/hablando) MOSTRAMOS la cara
+    // (vista 0) como pantalla de conversación — el comportamiento de Xiaozhi
+    // con el avatar de DoveBox. El resto de vistas (reloj/casa/todo/noticias)
+    // y los dots se ocultan. Al volver a idle se restaura la vista anterior.
     void UpdateStateVisibility() {
         auto& app = Application::GetInstance();
         DeviceState state = app.GetDeviceState();
@@ -533,15 +766,302 @@ private:
         for (int i = 0; i < NUM_VIEWS; i++) {
             if (!views_[i]) continue;
             if (chat_active) {
-                lv_obj_add_flag(views_[i], LV_OBJ_FLAG_HIDDEN);
+                // En chat: solo la cara visible (vista 0), el resto oculto
+                if (i == 0) lv_obj_remove_flag(views_[i], LV_OBJ_FLAG_HIDDEN);
+                else lv_obj_add_flag(views_[i], LV_OBJ_FLAG_HIDDEN);
             } else if (i == current_view_) {
                 lv_obj_remove_flag(views_[i], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(views_[i], LV_OBJ_FLAG_HIDDEN);
             }
             if (dots_[i]) {
                 if (chat_active) lv_obj_add_flag(dots_[i], LV_OBJ_FLAG_HIDDEN);
                 else lv_obj_remove_flag(dots_[i], LV_OBJ_FLAG_HIDDEN);
             }
         }
+    }
+
+    // Opción B: emoción recibida del servidor (llm emotion → SetEmotion → este
+    // callback). Se marca dirty y se aplica en el hilo LVGL (ClockTickCb).
+    void OnEmotion(const char* emotion) {
+        if (!emotion) return;
+        current_emotion_ = emotion;
+        emotion_dirty_ = true;
+    }
+
+    // Aplica la emoción actual a la cara: cejas, boca (línea o arco), ojos.
+    // Mapeo aproximado de las emociones del servidor (textUtils.py EMOJI_MAP +
+    // estados internos): happy/sad/angry/surprised/thinking/sleepy/neutral...
+    void ApplyEmotion() {
+        emotion_dirty_ = false;
+        if (!brow_left_ || !mouth_) return;
+
+        // Reset común: cejas neutras, boca línea visible, arco oculto,
+        // pupilas tamaño normal.
+        lv_obj_set_style_translate_y(brow_left_, 0, 0);
+        lv_obj_set_style_translate_y(brow_right_, 0, 0);
+        lv_obj_set_style_transform_angle(brow_left_, 0, 0);
+        lv_obj_set_style_transform_angle(brow_right_, 0, 0);
+        lv_obj_set_style_transform_scale_x(brow_left_, 256, 0);
+        lv_obj_set_style_transform_scale_y(brow_left_, 256, 0);
+        lv_obj_set_style_transform_scale_x(brow_right_, 256, 0);
+        lv_obj_set_style_transform_scale_y(brow_right_, 256, 0);
+        lv_obj_set_style_transform_scale_x(mouth_, 256, 0);
+        lv_obj_set_style_transform_scale_y(mouth_, 256, 0);
+        lv_obj_set_style_transform_angle(mouth_, 0, 0);
+        lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_translate_x(pupil_left_, 0, 0);
+        lv_obj_set_style_translate_y(pupil_left_, 0, 0);
+        lv_obj_set_style_translate_x(pupil_right_, 0, 0);
+        lv_obj_set_style_translate_y(pupil_right_, 0, 0);
+        lv_obj_set_style_transform_scale_x(pupil_left_, 256, 0);
+        lv_obj_set_style_transform_scale_y(pupil_left_, 256, 0);
+        lv_obj_set_style_transform_scale_x(pupil_right_, 256, 0);
+        lv_obj_set_style_transform_scale_y(pupil_right_, 256, 0);
+        lv_obj_remove_flag(pupil_left_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(pupil_right_, LV_OBJ_FLAG_HIDDEN);
+
+        const std::string& e = current_emotion_;
+
+        if (e == "happy" || e == "laughing" || e == "loving" || e == "cool" ||
+            e == "confident" || e == "kissy" || e == "delicious" || e == "silly" ||
+            e == "funny" || e == "relaxed" || e == "winking") {
+            // Sonrisa: cejas arriba y separadas, boca curva ∪ (arc 0..180)
+            lv_obj_set_style_translate_y(brow_left_, -10, 0);
+            lv_obj_set_style_translate_y(brow_right_, -10, 0);
+            lv_arc_set_bg_angles(mouth_arc_, 0, 180);
+            lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+        } else if (e == "sad" || e == "crying" || e == "embarrassed") {
+            // Triste: extremo interior de las cejas ARRIBA (mirada apenada),
+            // boca curva ∩ (180..360). Ojo: LVGL rota en sentido horario con
+            // ángulo positivo → para subir el extremo interior, ceja izquierda
+            // en negativo y derecha en positivo. (v2.4.6: estaban invertidas
+            // con angry.)
+            lv_obj_set_style_transform_angle(brow_left_, -500, 0);
+            lv_obj_set_style_transform_angle(brow_right_, 500, 0);
+            lv_obj_set_style_translate_y(brow_left_, 4, 0);
+            lv_obj_set_style_translate_y(brow_right_, 4, 0);
+            lv_arc_set_bg_angles(mouth_arc_, 180, 360);
+            lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+        } else if (e == "angry") {
+            // Enfadado: extremo interior de las cejas ABAJO (ceño fruncido),
+            // boca recta apretada
+            lv_obj_set_style_transform_angle(brow_left_, 400, 0);
+            lv_obj_set_style_transform_angle(brow_right_, -400, 0);
+            lv_obj_set_style_translate_y(brow_left_, 6, 0);
+            lv_obj_set_style_translate_y(brow_right_, 6, 0);
+            lv_obj_set_style_transform_scale_x(mouth_, 210, 0);
+        } else if (e == "surprised" || e == "shocked") {
+            // Sorpresa: cejas muy arriba, boca O (arc pequeño casi cerrado),
+            // pupilas más pequeñas (mirada amplia)
+            lv_obj_set_style_translate_y(brow_left_, -18, 0);
+            lv_obj_set_style_translate_y(brow_right_, -18, 0);
+            lv_obj_set_style_transform_scale_x(brow_left_, 280, 0);
+            lv_obj_set_style_transform_scale_y(brow_left_, 280, 0);
+            lv_obj_set_style_transform_scale_x(brow_right_, 280, 0);
+            lv_obj_set_style_transform_scale_y(brow_right_, 280, 0);
+            lv_arc_set_bg_angles(mouth_arc_, 300, 420);  // ~círculo 120° inferior
+            lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+        } else if (e == "thinking" || e == "confused") {
+            // Pensando: ceja izquierda arriba, derecha abajo; boca torcida
+            lv_obj_set_style_translate_y(brow_left_, -12, 0);
+            lv_obj_set_style_transform_angle(brow_left_, 200, 0);
+            lv_obj_set_style_translate_y(brow_right_, 6, 0);
+            lv_obj_set_style_transform_angle(brow_right_, 200, 0);
+            lv_obj_set_style_transform_angle(mouth_, 200, 0);
+            lv_obj_set_style_transform_scale_x(mouth_, 180, 0);
+        } else if (e == "sleepy") {
+            // Somnoliento: cejas bajas, boca pequeña, SIN pupilas (ojos
+            // vacíos — se ocultan, no se bajan; el reset común las restaura)
+            lv_obj_set_style_translate_y(brow_left_, 6, 0);
+            lv_obj_set_style_translate_y(brow_right_, 6, 0);
+            lv_obj_set_style_transform_scale_x(mouth_, 180, 0);
+            lv_obj_add_flag(pupil_left_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(pupil_right_, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            // neutral / robot_2 / resto: reposo
+            lv_arc_set_bg_angles(mouth_arc_, 0, 180);
+            lv_obj_set_style_transform_scale_x(mouth_, 256, 0);
+        }
+        ESP_LOGI(TAG, "emotion -> %s", e.c_str());
+    }
+
+    // Opción B: mensaje de chat recibido (stt user / llm assistant → SetChatMessage
+    // del board). Se guarda y se aplica en el hilo LVGL (ClockTickCb).
+    void OnChatMessage(const char* role, const char* content) {
+        if (!role || !content) return;
+        chat_role_ = role;
+        chat_text_ = content;
+        chat_dirty_ = true;
+    }
+
+    // Muestra en la cara el estado del chat: "Escuchando…", el texto transcrito
+    // (user), "Hablando…" o la respuesta del asistente (assistant). Se llama
+    // desde ClockTickCb cuando chat_dirty_ o al cambiar el estado del device.
+    void UpdateChatState() {
+        if (!chat_label_) return;
+        auto& app = Application::GetInstance();
+        DeviceState state = app.GetDeviceState();
+
+        // Label visible solo durante el chat (Listening/Speaking/Connecting...)
+        bool chat_active = (state == kDeviceStateListening || state == kDeviceStateSpeaking ||
+                            state == kDeviceStateConnecting || state == kDeviceStateUpgrading ||
+                            state == kDeviceStateWifiConfiguring || state == kDeviceStateAudioTesting ||
+                            state == kDeviceStateActivating);
+        if (!chat_active) {
+            lv_obj_add_flag(chat_label_, LV_OBJ_FLAG_HIDDEN);
+            lip_active_ = false;
+            return;
+        }
+
+        lv_obj_remove_flag(chat_label_, LV_OBJ_FLAG_HIDDEN);
+
+        // Mensaje reciente del servidor → mostrarlo (stt user = lo que ha
+        // escuchado; llm assistant = la respuesta). Tiene prioridad sobre los
+        // estados por defecto ("Escuchando…"/"Hablando…").
+        if (chat_dirty_) {
+            chat_dirty_ = false;
+            if (chat_role_ == "user" && !chat_text_.empty()) {
+                lv_label_set_text(chat_label_, chat_text_.c_str());
+                lv_obj_set_style_text_color(chat_label_, CLR_SKY, 0);
+            } else if (chat_role_ == "assistant" && !chat_text_.empty()) {
+                lv_label_set_text(chat_label_, chat_text_.c_str());
+                lv_obj_set_style_text_color(chat_label_, CLR_MINT, 0);
+            } else if (chat_role_ == "system" && !chat_text_.empty()) {
+                // Progreso OTA / avisos del sistema (p.ej. "45% 123KB/s",
+                // "Nueva versión: 2.4.8"). El stock los mostraba en la cara;
+                // antes los borrábamos → el usuario no veía el progreso al
+                // actualizar (bug reportado 2026-08-08).
+                lv_label_set_text(chat_label_, chat_text_.c_str());
+                lv_obj_set_style_text_color(chat_label_, CLR_TEXT, 0);
+            }
+            return;
+        }
+
+        // Sin mensaje nuevo: estado por defecto según el device state
+        if (state == kDeviceStateListening) {
+            lv_label_set_text(chat_label_, "Escuchando…");
+            lv_obj_set_style_text_color(chat_label_, CLR_DIM, 0);
+        } else if (state == kDeviceStateSpeaking) {
+            lv_label_set_text(chat_label_, "Hablando…");
+            lv_obj_set_style_text_color(chat_label_, CLR_MINT, 0);
+        }
+    }
+
+    // Lip sync (fase 1, por estado): mientras el dispositivo está en Speaking,
+    // la boca se abre/cierra con una onda pseudo-aleatoria (simula el ritmo de
+    // la voz). El lip sync REAL con la amplitud del audio ES8311 es fase 2.
+    void UpdateLipSync() {
+        if (!mouth_ || !mouth_arc_) return;
+        auto& app = Application::GetInstance();
+        DeviceState state = app.GetDeviceState();
+        bool speaking = (state == kDeviceStateSpeaking);
+
+        if (!speaking) {
+            if (lip_active_) {
+                lip_active_ = false;
+                // Devolver la boca a su forma según la emoción actual
+                emotion_dirty_ = true;
+            }
+            return;
+        }
+
+        if (!lip_active_) {
+            lip_active_ = true;
+            lip_phase_ms_ = 0;
+            // Durante el lip sync la boca curva manda (el arco), con la
+            // sonrisa como base si la emoción es happy/neutral.
+            lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+            lv_arc_set_bg_angles(mouth_arc_, 0, 180);
+        }
+
+        // Onda de "voz": frecuencia pseudo-aleatoria (4-12 Hz) + ruido de
+        // amplitud. Escalamos la boca en Y (abrir/cerrar) y un poco en X.
+        lip_phase_ms_ += CLOCK_TICK_MS;
+        float t = lip_phase_ms_ * 0.001f;
+        float freq = 6.0f + 5.0f * (0.5f + 0.5f * sinf(t * 0.7f));       // 6-11 Hz
+        float wave = sinf(t * freq * 2.0f * 3.14159f);
+        float open = 0.35f + 0.65f * (0.5f + 0.5f * wave);                // 0.35..1.0
+        open *= (0.75f + 0.25f * (float)(rand() % 100) / 100.0f);          // ruido
+
+        int scale_y = 256 + (int)(500 * open);   // 256..~756 (abre mucho)
+        int scale_x = 256 + (int)(80 * open);    // se ensancha al abrir
+        lv_obj_set_style_transform_scale_y(mouth_arc_, scale_y, 0);
+        lv_obj_set_style_transform_scale_x(mouth_arc_, scale_x, 0);
+    }
+
+    // Emoción sleepy: zzz flotando (arriba-derecha, en bucle) y boca de
+    // ronquido (arco pequeño que abre/cierra lento, ~0.8 Hz, con pico corto
+    // estilo "inhalar lento / exhalar rápido").
+    void UpdateSleep() {
+        auto& app = Application::GetInstance();
+        bool speaking = (app.GetDeviceState() == kDeviceStateSpeaking);
+        bool sleepy = (current_emotion_ == "sleepy");
+
+        // --- zzz flotantes ---
+        if (sleep_zzz_[0]) {
+            if (!sleepy || speaking) {
+                zzz_phase_ms_ = 0;
+                for (int i = 0; i < 3; i++) {
+                    lv_obj_add_flag(sleep_zzz_[i], LV_OBJ_FLAG_HIDDEN);
+                    lv_obj_set_style_text_opa(sleep_zzz_[i], LV_OPA_TRANSP, 0);
+                    lv_obj_set_style_translate_y(sleep_zzz_[i], 0, 0);
+                    lv_obj_set_style_translate_x(sleep_zzz_[i], 0, 0);
+                }
+            } else {
+                zzz_phase_ms_ += CLOCK_TICK_MS;
+                for (int i = 0; i < 3; i++) {
+                    // ciclo de 2.4s, escalonado 0.8s por letra
+                    float p = fmodf((zzz_phase_ms_ * 0.001f + i * 0.8f) / 2.4f, 1.0f);
+                    float rise = p * 34.0f;
+                    float opa = 0.0f;
+                    if (p > 0.08f && p < 0.95f) {
+                        float a = (p - 0.08f) / 0.20f;   // fade in
+                        float b = (0.95f - p) / 0.25f;   // fade out
+                        opa = fminf(a, b);
+                    }
+                    if (opa < 0.0f) opa = 0.0f;
+                    if (opa > 1.0f) opa = 1.0f;
+                    lv_obj_remove_flag(sleep_zzz_[i], LV_OBJ_FLAG_HIDDEN);
+                    lv_obj_set_style_text_opa(sleep_zzz_[i], (lv_opa_t)(255 * opa), 0);
+                    lv_obj_set_style_translate_y(sleep_zzz_[i], -(int)rise, 0);
+                    lv_obj_set_style_translate_x(sleep_zzz_[i], (int)(rise * 0.55f), 0);
+                }
+            }
+        }
+
+        // --- boca de ronquido ---
+        // Pedido 2026-08-08: "cuando duerme, cambia la boca a un circuito
+        // (círculo) que cambie de tamaño". El círculo se agranda/encoge con
+        // el ritmo del ronquido (0.8 Hz, escala UNIFORME en X e Y).
+        if (!mouth_ || !snore_mouth_) return;
+        if (!sleepy || speaking) {
+            if (snore_active_) {
+                snore_active_ = false;
+                lv_obj_add_flag(snore_mouth_, LV_OBJ_FLAG_HIDDEN);
+                if (!speaking) emotion_dirty_ = true;   // la emoción redibuja la boca
+            }
+            return;
+        }
+        if (!snore_active_) {
+            snore_active_ = true;
+            snore_phase_ = 0.0f;
+            lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(snore_mouth_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_transform_scale_x(snore_mouth_, 256, 0);
+            lv_obj_set_style_transform_scale_y(snore_mouth_, 256, 0);
+        }
+        snore_phase_ += CLOCK_TICK_MS * 0.001f;
+        float w = 0.5f + 0.5f * sinf(snore_phase_ * 0.8f * 2.0f * 3.14159f);  // 0..1 a 0.8 Hz
+        float snore = powf(w, 2.5f);                        // pico corto (ronquido)
+        int s = 256 + (int)(220 * snore);                   // 256..476, uniforme
+        lv_obj_set_style_transform_scale_x(snore_mouth_, s, 0);
+        lv_obj_set_style_transform_scale_y(snore_mouth_, s, 0);
     }
 
     void UpdateClock() {
@@ -574,18 +1094,29 @@ private:
     }
 
     // ---------------- Cara (ojos) ----------------
-    // Parpadeo por PÁRPADOS (fix definitivo 2026-08-07 v11): los ojos NO se
-    // escalan nunca (el transform dejaba los ojos achatados en v7-v10 pese al
-    // self-healing). El parpadeo muestra/oculta dos overlays (párpados) con
-    // el mismo aspecto que el ojo cerrado. Máquina de estados por tiempo.
+    // Parpadeo BINARIO (preferencia de Quique 2026-08-08: "me gusta más el
+    // pestañeo de antes", tras probar cortinilla y tapa). Los párpados son
+    // overlays que se muestran (cerrar) y ocultan (abrir) de golpe tras
+    // 180ms — el comportamiento original v12. Los OJOS nunca se escalan
+    // (pitfall v7-v10). En sleepy NO se parpadea. ~12% parpadeos dobles.
     void UpdateEyes() {
         if (!eye_left_) return;
+        // Al dormir los ojos están vacíos (sin pupilas): no parpadear.
+        if (current_emotion_ == "sleepy") {
+            if (blink_start_ms_ >= 0 || !lv_obj_has_flag(lid_left_, LV_OBJ_FLAG_HIDDEN)) {
+                lv_obj_add_flag(lid_left_, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(lid_right_, LV_OBJ_FLAG_HIDDEN);
+                blink_start_ms_ = -1;
+            }
+            return;
+        }
         int now_ms = lv_tick_get();
 
         if (blink_start_ms_ < 0) {
             if (now_ms - last_blink_ms_ < 2500 + (rand() % 3500)) return;
             last_blink_ms_ = now_ms;
             blink_start_ms_ = now_ms;
+            blink_double_pending_ = (rand() % 100) < 12;
             // Cerrar ojos: mostrar párpados
             lv_obj_remove_flag(lid_left_, LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(lid_right_, LV_OBJ_FLAG_HIDDEN);
@@ -598,6 +1129,217 @@ private:
             lv_obj_add_flag(lid_left_, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(lid_right_, LV_OBJ_FLAG_HIDDEN);
             blink_start_ms_ = -1;
+            // Parpadeo doble: el próximo llega a los ~250ms
+            if (blink_double_pending_) {
+                blink_double_pending_ = false;
+                last_blink_ms_ = now_ms - (2500 + (rand() % 3500)) + 250;
+            }
+        }
+    }
+
+    // Micro-saccades: en reposo la mirada no está fija — cada 2-5s las
+    // pupilas saltan a un punto aleatorio (±10px), se quedan un rato y
+    // vuelven. Solo en la vista face, sin swipe (pressed_), sin emoción del
+    // servidor activa, sin lip sync (al hablar se mira "a los ojos").
+    void UpdateSaccades() {
+        if (!pupil_left_ || !pupil_right_) return;
+        if (current_view_ != 0) return;
+        if (pressed_) return;
+        if (lip_active_) return;
+        if (!current_emotion_.empty() && current_emotion_ != "neutral" &&
+            current_emotion_ != "robot_2") return;
+        int now_ms = lv_tick_get();
+
+        if (saccade_start_ms_ < 0) {
+            if (now_ms - saccade_next_ms_ < 2000 + (rand() % 3000)) return;
+            saccade_next_ms_ = now_ms;
+            saccade_start_ms_ = now_ms;
+            saccade_tx_ = (rand() % 21) - 10;   // -10..10
+            saccade_ty_ = (rand() % 17) - 8;    // -8..8
+            saccade_hold_end_ms_ = now_ms + 400 + (rand() % 1200);
+            saccade_returning_ = false;
+            return;
+        }
+
+        int px = 0, py = 0;
+        if (!saccade_returning_) {
+            if (now_ms < saccade_start_ms_ + 150) {
+                // Interpolar al target (150ms)
+                float k = (float)(now_ms - saccade_start_ms_) / 150.0f;
+                px = (int)(saccade_tx_ * k);
+                py = (int)(saccade_ty_ * k);
+            } else if (now_ms < saccade_hold_end_ms_) {
+                // Mantener la mirada
+                px = saccade_tx_;
+                py = saccade_ty_;
+            } else {
+                // Empezar a volver
+                saccade_returning_ = true;
+                saccade_return_start_ = now_ms;
+            }
+        }
+        if (saccade_returning_) {
+            if (now_ms < saccade_return_start_ + 150) {
+                float k = 1.0f - (float)(now_ms - saccade_return_start_) / 150.0f;
+                px = (int)(saccade_tx_ * k);
+                py = (int)(saccade_ty_ * k);
+            } else {
+                px = 0; py = 0;
+                saccade_start_ms_ = -1;
+            }
+        }
+        lv_obj_set_style_translate_x(pupil_left_, px, 0);
+        lv_obj_set_style_translate_y(pupil_left_, py, 0);
+        lv_obj_set_style_translate_x(pupil_right_, px, 0);
+        lv_obj_set_style_translate_y(pupil_right_, py, 0);
+    }
+
+    // Respiración: ciclo vertical lento (±3px, periodo 4s) del grupo de la
+    // cara. Da la sensación de que "está vivo" aunque no haya expresión.
+    // Solo en la vista face y en reposo (no pisa el lip sync ni las
+    // emociones; el grupo solo contiene ojos/cejas/boca/párpados).
+    void UpdateBreath() {
+        if (!face_group_) return;
+        if (current_view_ != 0) return;
+        if (lip_active_) {  // al hablar la boca hace lip sync; no respirar
+            return;
+        }
+        breath_phase_ms_ += CLOCK_TICK_MS;
+        float w = (float)(breath_phase_ms_ % 4000) / 4000.0f * 6.2831853f;
+        int ty = (int)(3.0f * sinf(w));
+        lv_obj_set_style_translate_y(face_group_, ty, 0);
+    }
+
+    // Expresiones animadas (idle): cada 4-7s las cejas suben y la boca se
+    // alarga (sonrisa más amplia) durante ~2s, luego vuelve. Solo cuando NO
+    // hay una emoción del servidor activa (neutral/vacía), para no pisar la
+    // expresión que manda el LLM (Opción B).
+    void UpdateExpression() {
+        if (!brow_left_ || !mouth_) return;
+        if (!current_emotion_.empty() && current_emotion_ != "neutral" &&
+            current_emotion_ != "robot_2") return;
+        int now_ms = lv_tick_get();
+
+        if (expr_start_ms_ < 0) {
+            if (now_ms - last_expr_ms_ < 4000 + (rand() % 3000)) return;
+            last_expr_ms_ = now_ms;
+            expr_start_ms_ = now_ms;
+            expr_duration_ = 2000;
+            return;
+        }
+
+        int dt = now_ms - expr_start_ms_;
+        if (dt >= expr_duration_) {
+            // Volver al reposo
+            expr_start_ms_ = -1;
+            lv_obj_set_style_translate_y(brow_left_, 0, 0);
+            lv_obj_set_style_translate_y(brow_right_, 0, 0);
+            lv_obj_set_style_transform_scale_x(mouth_, 256, 0);
+            lv_obj_set_style_transform_scale_y(mouth_, 256, 0);
+            return;
+        }
+
+        // Envelope: sube 0-25%, mantiene 25-75%, baja 75-100%
+        float p = (float)dt / expr_duration_;
+        float k;
+        if (p < 0.25f) k = p / 0.25f;
+        else if (p < 0.75f) k = 1.0f;
+        else k = 1.0f - (p - 0.75f) / 0.25f;
+
+        // Cejas: suben 8px (sutil)
+        int brow_y = -(int)(8 * k);
+        lv_obj_set_style_translate_y(brow_left_, brow_y, 0);
+        lv_obj_set_style_translate_y(brow_right_, brow_y, 0);
+
+        // Boca: se alarga (sonrisa más amplia, 100% → 130% en X)
+        int mscale = 256 + (int)(76 * k);
+        lv_obj_set_style_transform_scale_x(mouth_, mscale, 0);
+        lv_obj_set_style_transform_scale_y(mouth_, 256, 0);
+    }
+
+    // ---------------- Sobresalto (despertar / shake) ----------------
+    // Pose breve de sorpresa: cejas muy arriba, boca O, pupilas pequeñas.
+    // Dura ~700ms y luego la emoción actual redibuja la cara.
+    void TriggerStartle() {
+        if (startle_start_ms_ < 0) startle_start_ms_ = lv_tick_get();
+    }
+
+    bool startle_active() const { return startle_start_ms_ >= 0; }
+
+    void UpdateStartle() {
+        if (startle_start_ms_ < 0) return;
+        int now_ms = lv_tick_get();
+        if (now_ms - startle_start_ms_ >= 700) {
+            startle_start_ms_ = -1;
+            emotion_dirty_ = true;   // la emoción actual restaura la cara
+            return;
+        }
+        if (!brow_left_ || !mouth_arc_) return;
+        // Cejas muy arriba y separadas (escala mayor)
+        lv_obj_set_style_translate_y(brow_left_, -18, 0);
+        lv_obj_set_style_translate_y(brow_right_, -18, 0);
+        lv_obj_set_style_transform_scale_x(brow_left_, 280, 0);
+        lv_obj_set_style_transform_scale_y(brow_left_, 280, 0);
+        lv_obj_set_style_transform_scale_x(brow_right_, 280, 0);
+        lv_obj_set_style_transform_scale_y(brow_right_, 280, 0);
+        // Boca O (arco casi círculo)
+        lv_arc_set_bg_angles(mouth_arc_, 300, 420);
+        lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+        // Pupilas pequeñas y centradas (mirada amplia)
+        if (pupil_left_) {
+            lv_obj_set_style_transform_scale_x(pupil_left_, 140, 0);
+            lv_obj_set_style_transform_scale_y(pupil_left_, 140, 0);
+            lv_obj_set_style_transform_scale_x(pupil_right_, 140, 0);
+            lv_obj_set_style_transform_scale_y(pupil_right_, 140, 0);
+            lv_obj_set_style_translate_x(pupil_left_, 0, 0);
+            lv_obj_set_style_translate_y(pupil_left_, 0, 0);
+            lv_obj_set_style_translate_x(pupil_right_, 0, 0);
+            lv_obj_set_style_translate_y(pupil_right_, 0, 0);
+        }
+        // Sin parpadeo mientras dura el sobresalto
+        lv_obj_add_flag(lid_left_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(lid_right_, LV_OBJ_FLAG_HIDDEN);
+        blink_start_ms_ = -1;
+    }
+
+    // ---------------- Eventos del giroscopio (QMI8658) ----------------
+    void OnImu(const char* event) {
+        if (!event) return;
+        imu_event_ = event;
+        imu_dirty_ = true;
+    }
+
+    // Aplica el evento IMU en el hilo LVGL: shake → sobresalto (y despierta
+    // si estaba dormido); boca abajo → se duerme; boca arriba → despierta.
+    // Solo en idle (durante el chat no interrumpimos).
+    void ApplyImuEvent() {
+        auto& app = Application::GetInstance();
+        if (app.GetDeviceState() != kDeviceStateIdle) {
+            ESP_LOGI(TAG, "imu event '%s' ignorado (chat activo)", imu_event_.c_str());
+            return;
+        }
+        if (imu_event_ == "shake") {
+            ESP_LOGI(TAG, "imu -> shake: sobresalto");
+            if (current_emotion_ == "sleepy") {
+                current_emotion_.clear();
+                emotion_dirty_ = true;
+            }
+            TriggerStartle();
+        } else if (imu_event_ == "bottom_up") {
+            // Boca abajo → a dormir (como en la vida real)
+            if (current_emotion_.empty() || current_emotion_ == "neutral" ||
+                current_emotion_ == "robot_2") {
+                ESP_LOGI(TAG, "imu -> bottom_up: a dormir");
+                current_emotion_ = "sleepy";
+                emotion_dirty_ = true;
+            }
+        } else if (imu_event_ == "top_up") {
+            if (current_emotion_ == "sleepy") {
+                ESP_LOGI(TAG, "imu -> top_up: despierto");
+                current_emotion_.clear();
+                emotion_dirty_ = true;
+            }
         }
     }
 
@@ -615,10 +1357,15 @@ private:
         lv_point_t p;
         lv_indev_get_point(indev, &p);
         bool pressed = (lv_indev_get_state(indev) & LV_INDEV_STATE_PRESSED) != 0;
+        int now_ms = lv_tick_get();
 
         if (pressed && !pressed_) {
             pressed_ = true;
             press_start_ = p;
+            press_start_ms_ = now_ms;
+            // Cualquier toque despierta el hardware (salir de power-save y
+            // resetear el timer de reposo de 60s).
+            dovebox_board_wake_screen();
         } else if (pressed && pressed_) {
             // swipe en curso: seguimos las pupilas si estamos en la vista face
             if (current_view_ == 0 && eye_left_) {
@@ -643,10 +1390,32 @@ private:
                 lv_obj_set_style_translate_y(pupil_right_, 0, 0);
             }
             int dx = p.x - press_start_.x;
-            if (dx < -SWIPE_THRESHOLD && current_view_ < NUM_VIEWS - 1) {
-                ShowView(current_view_ + 1);
-            } else if (dx > SWIPE_THRESHOLD && current_view_ > 0) {
-                ShowView(current_view_ - 1);
+            int dy = p.y - press_start_.y;
+            int adx = dx > 0 ? dx : -dx;
+            int ady = dy > 0 ? dy : -dy;
+            int dt = now_ms - press_start_ms_;
+
+            // Swipe "fino" (2026-08-08): umbral bajo + flick rápido + gesto
+            // dominante en horizontal (no roza con scrolls verticales).
+            // Solo horizontal: |dx| > 1.5·|dy|.
+            bool swipe = (adx >= SWIPE_THRESHOLD) || (adx >= 18 && dt <= 300);
+            if (swipe && adx > ady * 3 / 2) {
+                if (dx < 0 && current_view_ < NUM_VIEWS - 1) {
+                    ShowView(current_view_ + 1);
+                } else if (dx > 0 && current_view_ > 0) {
+                    ShowView(current_view_ - 1);
+                }
+            } else if (adx < 20 && ady < 20 && dt < 500) {
+                // Tap: despertar de la siesta con un pequeño sobresalto
+                // (solo en la cara y en reposo — durante el chat no).
+                auto& app = Application::GetInstance();
+                if (app.GetDeviceState() == kDeviceStateIdle && current_view_ == 0) {
+                    if (current_emotion_ == "sleepy") {
+                        current_emotion_.clear();
+                        emotion_dirty_ = true;
+                    }
+                    TriggerStartle();
+                }
             }
         }
     }
@@ -1069,7 +1838,31 @@ void DoveboxDashboard::ClockTickCb(lv_timer_t* t) {
     self->UpdateStateVisibility();
     self->UpdateGestures();
     self->UpdateClock();
-    self->UpdateEyes();
+
+    // IMU (giroscopio): eventos del board aplicados en el hilo LVGL
+    if (self->imu_dirty_) {
+        self->imu_dirty_ = false;
+        self->ApplyImuEvent();
+    }
+
+    // Sobresalto: mientras dura, su pose manda (nada de parpadeo/saccades/
+    // respiración/emoción del servidor); al terminar, la emoción restaura.
+    if (self->startle_active()) {
+        self->UpdateStartle();
+    } else {
+        if (self->emotion_dirty_) self->ApplyEmotion();
+        self->UpdateEyes();
+        self->UpdateSaccades();
+        self->UpdateBreath();
+    }
+    self->UpdateChatState();
+    self->UpdateLipSync();
+    self->UpdateSleep();
+    self->UpdateExpression();
+    if (++self->battery_tick_ >= 100) {   // ~10s
+        self->battery_tick_ = 0;
+        self->UpdateBattery();
+    }
     if (self->first_fetch_ok_) {
         self->first_fetch_ok_ = false;
         if (self->poll_timer_) lv_timer_set_period(self->poll_timer_, POLL_INTERVAL_MS);
@@ -1132,4 +1925,22 @@ void DoveboxDashboard::PatchTask(void* arg) {
 // Factory para el board (evita exponer la clase completa en un header)
 extern "C" void* dovebox_dashboard_create(void* display, void* screen) {
     return new DoveboxDashboard(static_cast<LcdDisplay*>(display), static_cast<lv_obj_t*>(screen));
+}
+
+// Opción B: notificación de emoción del servidor (llm emotion → SetEmotion del
+// board). El board llama a esto desde CustomLcdDisplay::SetEmotion; el
+// dashboard guarda la emoción y la aplica en el hilo LVGL (ClockTickCb).
+extern "C" void dovebox_dashboard_on_emotion(const char* emotion) {
+    DoveboxDashboard::NotifyEmotion(emotion);
+}
+
+// Mensaje de chat (stt user / llm assistant → SetChatMessage del board).
+extern "C" void dovebox_dashboard_on_chat_message(const char* role, const char* content) {
+    DoveboxDashboard::NotifyChatMessage(role, content);
+}
+
+// Evento del giroscopio (QMI8658): shake / bottom_up / top_up. Lo detecta el
+// task de IMU del board y se aplica en el hilo LVGL (ClockTickCb).
+extern "C" void dovebox_dashboard_on_imu(const char* event) {
+    DoveboxDashboard::NotifyImu(event);
 }
