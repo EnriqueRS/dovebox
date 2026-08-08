@@ -96,16 +96,20 @@ public:
         return true;
     }
 
-    // Aceleración en g (convención: +g hacia abajo)
+    // Aceleración en g (convención: +g hacia abajo).
+    // ⚠️ ESCALA: con rango ±4g la sensibilidad es 8192 LSB/g (4/32768),
+    // NO 4096 (eso sería ±8g). Bug v2.4.8: 4096 hacía que en reposo la
+    // magnitud leyera ~2g → |mag−1g|>0.9 SIEMPRE → shake continuo
+    // (sobresaltos constantes reportados por Quique 2026-08-08).
     bool ReadAccel(float& ax, float& ay, float& az) {
         uint8_t buf[6];
         ReadRegs(0x35, buf, 6);
         int16_t rx = (int16_t)((buf[1] << 8) | buf[0]);
         int16_t ry = (int16_t)((buf[3] << 8) | buf[2]);
         int16_t rz = (int16_t)((buf[5] << 8) | buf[4]);
-        ax = rx / 4096.0f;
-        ay = ry / 4096.0f;
-        az = rz / 4096.0f;
+        ax = rx / 8192.0f;
+        ay = ry / 8192.0f;
+        az = rz / 8192.0f;
         return true;
     }
 };
