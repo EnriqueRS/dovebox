@@ -1,0 +1,16 @@
+[Unit]
+Description=DoveBox Hermes MCP Bridge
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/kike/.hermes/hermes-agent/venv/bin/python /docker/dovebox/scripts/hermes_mcp_bridge.py
+Restart=on-failure
+RestartSec=10
+Environment=HERMES_HOME=/home/kike/.hermes
+Environment=HA_URL=http://localhost:8123
+Environment=DOVEBOX_AGGREGATOR_URL=http://192.168.100.73:18100
+Environment=HERMES_CLI=/home/kike/.local/bin/hermes
+
+[Install]
+WantedBy=default.target
