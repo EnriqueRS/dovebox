@@ -1,0 +1,19 @@
+services:
+  dovebox-hermes-mcp:
+    build: .
+    container_name: dovebox-hermes-mcp
+    restart: unless-stopped
+    ports:
+      - "18110:18110"
+    volumes:
+      - /home/kike/.hermes:/hermes-home:ro
+      - /home/kike/.local/bin/hermes:/usr/local/bin/hermes:ro
+    environment:
+      - DOVEBOX_MCP_PORT=18110
+      - DOVEBOX_AGGREGATOR_URL=http://192.168.100.73:18100
+      - HA_URL=http://host.docker.internal:8123
+      - HERMES_CLI=/usr/local/bin/hermes
+      - HERMES_HOME=/hermes-home
+      - HASS_TOKEN=${HASS_TOKEN}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
