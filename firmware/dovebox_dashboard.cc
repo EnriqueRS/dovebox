@@ -196,7 +196,6 @@ private:
     lv_obj_t* brow_right_ = nullptr;
     lv_obj_t* mouth_ = nullptr;
     lv_obj_t* mouth_arc_ = nullptr;  // boca curva (sonrisa/triste/O) para emociones
-    lv_obj_t* face_time_ = nullptr;
     // Contenedor de la cara: agrupa ojos/cejas/boca para la respiración
     lv_obj_t* face_group_ = nullptr;
     int last_blink_ms_ = 0;
@@ -351,7 +350,7 @@ private:
         lv_obj_align(battery_label_, LV_ALIGN_BOTTOM_LEFT, 16, -10);
         lv_obj_set_style_text_opa(battery_label_, LV_OPA_70, 0);
 
-        char vbuf[24];
+        char vbuf[48];
         snprintf(vbuf, sizeof(vbuf), "v%s", dovebox_fw_version());
         version_label_ = MakeLabel(screen_, vbuf, CLR_FAINT, font);
         lv_obj_align(version_label_, LV_ALIGN_BOTTOM_RIGHT, -16, -10);
@@ -366,7 +365,7 @@ private:
         bool charging = false, discharging = false;
         auto& board = Board::GetInstance();
         if (!board.GetBatteryLevel(level, charging, discharging) || level < 0) return;
-        char buf[8];
+        char buf[16];
         snprintf(buf, sizeof(buf), "%d%%", level);
         lv_label_set_text(battery_label_, buf);
         lv_color_t c = CLR_DIM;
@@ -400,7 +399,7 @@ private:
         lv_obj_set_style_shadow_width(eye_left_, 22, 0);
         lv_obj_set_style_shadow_spread(eye_left_, 2, 0);
         lv_obj_set_style_pad_all(eye_left_, 0, 0);
-        lv_obj_align(eye_left_, LV_ALIGN_CENTER, -64, -30);
+        lv_obj_align(eye_left_, LV_ALIGN_CENTER, -64, -60);
 
         eye_right_ = lv_obj_create(face_group_);
         lv_obj_set_size(eye_right_, 104, 126);
@@ -413,7 +412,7 @@ private:
         lv_obj_set_style_shadow_width(eye_right_, 22, 0);
         lv_obj_set_style_shadow_spread(eye_right_, 2, 0);
         lv_obj_set_style_pad_all(eye_right_, 0, 0);
-        lv_obj_align(eye_right_, LV_ALIGN_CENTER, 64, -30);
+        lv_obj_align(eye_right_, LV_ALIGN_CENTER, 64, -60);
 
         // Pupila: círculo cian brillante con gradiente (oscuro en la base)
         pupil_left_ = lv_obj_create(eye_left_);
@@ -464,7 +463,7 @@ private:
         lv_obj_set_style_bg_color(brow_left_, lv_color_hex(0x2e5f78), 0);
         lv_obj_set_style_bg_opa(brow_left_, LV_OPA_60, 0);
         lv_obj_set_style_border_width(brow_left_, 0, 0);
-        lv_obj_align(brow_left_, LV_ALIGN_CENTER, -64, -112);
+        lv_obj_align(brow_left_, LV_ALIGN_CENTER, -64, -142);
 
         brow_right_ = lv_obj_create(face_group_);
         lv_obj_set_size(brow_right_, 48, 4);
@@ -472,7 +471,7 @@ private:
         lv_obj_set_style_bg_color(brow_right_, lv_color_hex(0x2e5f78), 0);
         lv_obj_set_style_bg_opa(brow_right_, LV_OPA_60, 0);
         lv_obj_set_style_border_width(brow_right_, 0, 0);
-        lv_obj_align(brow_right_, LV_ALIGN_CENTER, 64, -112);
+        lv_obj_align(brow_right_, LV_ALIGN_CENTER, 64, -142);
 
         // Boca: línea fina horizontal (estilo minimalista)
         // SIN shadow: el shadow cian (opa 20, width 8) se solapaba con el del
@@ -484,7 +483,7 @@ private:
         lv_obj_set_style_bg_color(mouth_, lv_color_hex(0x2e5f78), 0);
         lv_obj_set_style_bg_opa(mouth_, LV_OPA_70, 0);
         lv_obj_set_style_border_width(mouth_, 0, 0);
-        lv_obj_align(mouth_, LV_ALIGN_CENTER, 0, 62);
+        lv_obj_align(mouth_, LV_ALIGN_CENTER, 0, 32);
 
         // Boca curva (lv_arc) para emociones: sonrisa ∪ (0..180), triste ∩
         // (180..360), O de sorpresa (círculo pequeño). Se muestra/oculta según
@@ -503,12 +502,13 @@ private:
         lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x4dd7ff), LV_PART_INDICATOR);
         lv_obj_set_style_arc_opa(mouth_arc_, LV_OPA_COVER, LV_PART_INDICATOR);
         lv_obj_set_style_arc_rounded(mouth_arc_, true, LV_PART_INDICATOR);
-        lv_obj_align(mouth_arc_, LV_ALIGN_CENTER, 0, 64);
+        lv_obj_set_style_transform_pivot_x(mouth_arc_, lv_pct(50), 0);
+        lv_obj_set_style_transform_pivot_y(mouth_arc_, lv_pct(50), 0);
+        lv_obj_align(mouth_arc_, LV_ALIGN_CENTER, 0, 34);
         lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
 
-        // Label de estado del chat: "Escuchando…", texto transcrito o respuesta
-        // del asistente. Se muestra solo durante el chat (lo gestiona
-        // UpdateStateVisibility / UpdateChatState).
+        // Chat label (subtítulos del chat), bajo la cara. La boca está más
+        // arriba (y=32) para dejar espacio a este texto.
         chat_label_ = lv_label_create(v);
         lv_label_set_text(chat_label_, "");
         lv_label_set_long_mode(chat_label_, LV_LABEL_LONG_WRAP);
@@ -516,23 +516,8 @@ private:
         lv_obj_set_style_text_color(chat_label_, CLR_DIM, 0);
         lv_obj_set_style_text_font(chat_label_, font, 0);
         lv_obj_set_style_text_align(chat_label_, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(chat_label_, LV_ALIGN_CENTER, 0, 118);
+        lv_obj_align(chat_label_, LV_ALIGN_CENTER, 0, 150);
         lv_obj_add_flag(chat_label_, LV_OBJ_FLAG_HIDDEN);
-
-        // Nombre arriba (antes estaba bajo los ojos)
-        lv_obj_t* label = MakeLabel(v, "DoveBox", CLR_DIM, font);
-        lv_obj_align(label, LV_ALIGN_CENTER, 0, -208);
-        lv_obj_set_style_text_letter_space(label, 8, 0);
-        lv_obj_set_style_text_opa(label, LV_OPA_60, 0);
-
-        // Hora en la cara, arriba (antes estaba bajo los ojos)
-        face_time_ = lv_label_create(v);
-        lv_label_set_text(face_time_, "00:00");
-        lv_obj_set_style_text_color(face_time_, CLR_FAINT, 0);
-        lv_obj_set_style_text_font(face_time_, &font_noto_sans_basic_30_4, 0);
-        lv_obj_set_style_transform_scale_x(face_time_, 120, 0);
-        lv_obj_set_style_transform_scale_y(face_time_, 120, 0);
-        lv_obj_align(face_time_, LV_ALIGN_CENTER, 0, -160);
 
         // Zzz de dormir (emoción sleepy): tres "z" a distinta escala, a la
         // derecha de la cabeza. Los anima UpdateSleep (flotan arriba-derecha
@@ -566,7 +551,7 @@ private:
         lv_obj_set_style_shadow_width(lid_left_, 22, 0);
         lv_obj_set_style_shadow_spread(lid_left_, 2, 0);
         lv_obj_set_style_pad_all(lid_left_, 0, 0);
-        lv_obj_align(lid_left_, LV_ALIGN_CENTER, -64, -30);
+        lv_obj_align(lid_left_, LV_ALIGN_CENTER, -64, -60);
         lv_obj_add_flag(lid_left_, LV_OBJ_FLAG_HIDDEN);
 
         lid_right_ = lv_obj_create(face_group_);
@@ -580,7 +565,7 @@ private:
         lv_obj_set_style_shadow_width(lid_right_, 22, 0);
         lv_obj_set_style_shadow_spread(lid_right_, 2, 0);
         lv_obj_set_style_pad_all(lid_right_, 0, 0);
-        lv_obj_align(lid_right_, LV_ALIGN_CENTER, 64, -30);
+        lv_obj_align(lid_right_, LV_ALIGN_CENTER, 64, -60);
         lv_obj_add_flag(lid_right_, LV_OBJ_FLAG_HIDDEN);
 
         // Boca de ronquido (emoción sleepy): CÍRCULO cian que cambia de
@@ -597,10 +582,10 @@ private:
         lv_obj_set_style_arc_width(snore_mouth_, 6, LV_PART_MAIN);
         lv_obj_set_style_arc_color(snore_mouth_, lv_color_hex(0x1a2029), LV_PART_MAIN);
         lv_obj_set_style_arc_width(snore_mouth_, 6, LV_PART_INDICATOR);
-        lv_obj_set_style_arc_color(snore_mouth_, lv_color_hex(0x4dd7ff), LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(snore_mouth_, lv_color_hex(0x2e5f78), LV_PART_INDICATOR);
         lv_obj_set_style_arc_opa(snore_mouth_, LV_OPA_COVER, LV_PART_INDICATOR);
         lv_obj_set_style_arc_rounded(snore_mouth_, true, LV_PART_INDICATOR);
-        lv_obj_align(snore_mouth_, LV_ALIGN_CENTER, 0, 64);
+        lv_obj_align(snore_mouth_, LV_ALIGN_CENTER, 0, 34);
         lv_obj_add_flag(snore_mouth_, LV_OBJ_FLAG_HIDDEN);
         return v;
     }
@@ -811,6 +796,12 @@ private:
         lv_obj_set_style_transform_angle(mouth_, 0, 0);
         lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+        // Restaurar color del arco a cian (por si la última emoción
+        // (sorpresa) lo cambió al color de las cejas)
+        lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x4dd7ff), LV_PART_INDICATOR);
+        lv_obj_set_style_transform_scale_y(mouth_arc_, 256, 0);
+        lv_obj_set_style_transform_scale_x(mouth_arc_, 256, 0);
+        lv_obj_set_size(mouth_arc_, 88, 52);   // restaurar tamaño elíptico (sonrisa/triste)
         lv_obj_set_style_translate_x(pupil_left_, 0, 0);
         lv_obj_set_style_translate_y(pupil_left_, 0, 0);
         lv_obj_set_style_translate_x(pupil_right_, 0, 0);
@@ -863,7 +854,11 @@ private:
             lv_obj_set_style_transform_scale_y(brow_left_, 280, 0);
             lv_obj_set_style_transform_scale_x(brow_right_, 280, 0);
             lv_obj_set_style_transform_scale_y(brow_right_, 280, 0);
-            lv_arc_set_bg_angles(mouth_arc_, 300, 420);  // ~círculo 120° inferior
+            lv_obj_set_style_transform_scale_y(mouth_arc_, 256, 0);
+            lv_obj_set_style_transform_scale_x(mouth_arc_, 256, 0);
+            lv_obj_set_size(mouth_arc_, 60, 60);   // cuadrado = círculo perfecto
+            lv_arc_set_bg_angles(mouth_arc_, 0, 360);
+            lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x2e5f78), LV_PART_INDICATOR);
             lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
         } else if (e == "thinking" || e == "confused") {
@@ -978,6 +973,7 @@ private:
             lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
             lv_arc_set_bg_angles(mouth_arc_, 0, 180);
+            lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x4dd7ff), LV_PART_INDICATOR);
         }
 
         // Onda de "voz": frecuencia pseudo-aleatoria (4-12 Hz) + ruido de
@@ -1073,7 +1069,6 @@ private:
         char buf[16];
         snprintf(buf, sizeof(buf), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
         lv_label_set_text(clock_time_, buf);
-        if (face_time_) lv_label_set_text(face_time_, buf);
 
         static const char* meses[] = {"enero","febrero","marzo","abril","mayo","junio",
                                       "julio","agosto","septiembre","octubre","noviembre","diciembre"};
@@ -1282,8 +1277,10 @@ private:
         lv_obj_set_style_transform_scale_y(brow_left_, 280, 0);
         lv_obj_set_style_transform_scale_x(brow_right_, 280, 0);
         lv_obj_set_style_transform_scale_y(brow_right_, 280, 0);
-        // Boca O (arco casi círculo)
-        lv_arc_set_bg_angles(mouth_arc_, 300, 420);
+        // Boca O circular, del color de las cejas
+        lv_obj_set_size(mouth_arc_, 60, 60);
+        lv_arc_set_bg_angles(mouth_arc_, 0, 360);
+        lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x2e5f78), LV_PART_INDICATOR);
         lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
         // Pupilas pequeñas y centradas (mirada amplia)
