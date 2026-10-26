@@ -473,10 +473,29 @@ private:
         lv_obj_set_style_border_width(brow_right_, 0, 0);
         lv_obj_align(brow_right_, LV_ALIGN_CENTER, 64, -142);
 
-        // Boca: línea fina horizontal (estilo minimalista)
-        // SIN shadow: el shadow cian (opa 20, width 8) se solapaba con el del
-        // ojo derecho (width 22, llega hasta y≈297) y creaba un punto gris
-        // justo encima de la boca (bug reportado por Quique 2026-08-08).
+        // Boca: arco sutil de sonrisa relajada (el elemento PRINCIPAL de la
+        // boca). Siempre visible en reposo como una curva suave ∪. Al hablar
+        // crece de tamaño (no se escala en Y como antes, que distorsionaba).
+        mouth_arc_ = lv_arc_create(face_group_);
+        lv_obj_set_size(mouth_arc_, 80, 14);       // resto: curva sutil
+        lv_arc_set_rotation(mouth_arc_, 0);
+        lv_arc_set_bg_angles(mouth_arc_, 0, 180);
+        lv_arc_set_value(mouth_arc_, 100);
+        lv_arc_set_range(mouth_arc_, 0, 100);
+        lv_obj_remove_style(mouth_arc_, NULL, LV_PART_KNOB);
+        lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_arc_width(mouth_arc_, 5, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x1a2029), LV_PART_MAIN);
+        lv_obj_set_style_arc_width(mouth_arc_, 5, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x2e5f78), LV_PART_INDICATOR);
+        lv_obj_set_style_arc_opa(mouth_arc_, LV_OPA_80, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_rounded(mouth_arc_, true, LV_PART_INDICATOR);
+        lv_obj_set_style_transform_pivot_x(mouth_arc_, lv_pct(50), 0);
+        lv_obj_set_style_transform_pivot_y(mouth_arc_, lv_pct(50), 0);
+        lv_obj_align(mouth_arc_, LV_ALIGN_CENTER, 0, 32);
+
+        // Boca fina horizontal (fallback para emociones angry/thinking/sleepy
+        // donde no encaja un arco curvo). Oculta por defecto.
         mouth_ = lv_obj_create(face_group_);
         lv_obj_set_size(mouth_, 66, 5);
         lv_obj_set_style_radius(mouth_, LV_RADIUS_CIRCLE, 0);
@@ -484,28 +503,7 @@ private:
         lv_obj_set_style_bg_opa(mouth_, LV_OPA_70, 0);
         lv_obj_set_style_border_width(mouth_, 0, 0);
         lv_obj_align(mouth_, LV_ALIGN_CENTER, 0, 32);
-
-        // Boca curva (lv_arc) para emociones: sonrisa ∪ (0..180), triste ∩
-        // (180..360), O de sorpresa (círculo pequeño). Se muestra/oculta según
-        // la emoción del servidor (Opción B).
-        mouth_arc_ = lv_arc_create(face_group_);
-        lv_obj_set_size(mouth_arc_, 88, 52);
-        lv_arc_set_rotation(mouth_arc_, 0);
-        lv_arc_set_bg_angles(mouth_arc_, 0, 180);
-        lv_arc_set_value(mouth_arc_, 100);
-        lv_arc_set_range(mouth_arc_, 0, 100);
-        lv_obj_remove_style(mouth_arc_, NULL, LV_PART_KNOB);
-        lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_style_arc_width(mouth_arc_, 6, LV_PART_MAIN);
-        lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x1a2029), LV_PART_MAIN);
-        lv_obj_set_style_arc_width(mouth_arc_, 6, LV_PART_INDICATOR);
-        lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x4dd7ff), LV_PART_INDICATOR);
-        lv_obj_set_style_arc_opa(mouth_arc_, LV_OPA_COVER, LV_PART_INDICATOR);
-        lv_obj_set_style_arc_rounded(mouth_arc_, true, LV_PART_INDICATOR);
-        lv_obj_set_style_transform_pivot_x(mouth_arc_, lv_pct(50), 0);
-        lv_obj_set_style_transform_pivot_y(mouth_arc_, lv_pct(50), 0);
-        lv_obj_align(mouth_arc_, LV_ALIGN_CENTER, 0, 34);
-        lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
 
         // Chat label (subtítulos del chat), bajo la cara. La boca está más
         // arriba (y=32) para dejar espacio a este texto.
@@ -781,8 +779,9 @@ private:
         emotion_dirty_ = false;
         if (!brow_left_ || !mouth_) return;
 
-        // Reset común: cejas neutras, boca línea visible, arco oculto,
-        // pupilas tamaño normal.
+        // Reset común: el arco es la boca principal. Se restaura a su
+        // tamaño de reposo (curva sutil). La barra horizontal (mouth_)
+        // solo se usa como fallback para angry/thinking/sleepy.
         lv_obj_set_style_translate_y(brow_left_, 0, 0);
         lv_obj_set_style_translate_y(brow_right_, 0, 0);
         lv_obj_set_style_transform_angle(brow_left_, 0, 0);
@@ -791,17 +790,14 @@ private:
         lv_obj_set_style_transform_scale_y(brow_left_, 256, 0);
         lv_obj_set_style_transform_scale_x(brow_right_, 256, 0);
         lv_obj_set_style_transform_scale_y(brow_right_, 256, 0);
-        lv_obj_set_style_transform_scale_x(mouth_, 256, 0);
-        lv_obj_set_style_transform_scale_y(mouth_, 256, 0);
-        lv_obj_set_style_transform_angle(mouth_, 0, 0);
-        lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
-        // Restaurar color del arco a cian (por si la última emoción
-        // (sorpresa) lo cambió al color de las cejas)
-        lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x4dd7ff), LV_PART_INDICATOR);
-        lv_obj_set_style_transform_scale_y(mouth_arc_, 256, 0);
+        lv_obj_set_size(mouth_arc_, 80, 14);
+        lv_arc_set_bg_angles(mouth_arc_, 0, 180);
+        lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x2e5f78), LV_PART_INDICATOR);
+        lv_obj_set_style_arc_opa(mouth_arc_, LV_OPA_80, LV_PART_INDICATOR);
         lv_obj_set_style_transform_scale_x(mouth_arc_, 256, 0);
-        lv_obj_set_size(mouth_arc_, 88, 52);   // restaurar tamaño elíptico (sonrisa/triste)
+        lv_obj_set_style_transform_scale_y(mouth_arc_, 256, 0);
+        lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_translate_x(pupil_left_, 0, 0);
         lv_obj_set_style_translate_y(pupil_left_, 0, 0);
         lv_obj_set_style_translate_x(pupil_right_, 0, 0);
@@ -818,35 +814,34 @@ private:
         if (e == "happy" || e == "laughing" || e == "loving" || e == "cool" ||
             e == "confident" || e == "kissy" || e == "delicious" || e == "silly" ||
             e == "funny" || e == "relaxed" || e == "winking") {
-            // Sonrisa: cejas arriba y separadas, boca curva ∪ (arc 0..180)
+            // Sonrisa: cejas arriba y separadas, boca curva ∪ más amplia
             lv_obj_set_style_translate_y(brow_left_, -10, 0);
             lv_obj_set_style_translate_y(brow_right_, -10, 0);
+            lv_obj_set_size(mouth_arc_, 96, 36);
             lv_arc_set_bg_angles(mouth_arc_, 0, 180);
-            lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x4dd7ff), LV_PART_INDICATOR);
+            lv_obj_set_style_arc_opa(mouth_arc_, LV_OPA_COVER, LV_PART_INDICATOR);
         } else if (e == "sad" || e == "crying" || e == "embarrassed") {
             // Triste: extremo interior de las cejas ARRIBA (mirada apenada),
-            // boca curva ∩ (180..360). Ojo: LVGL rota en sentido horario con
-            // ángulo positivo → para subir el extremo interior, ceja izquierda
-            // en negativo y derecha en positivo. (v2.4.6: estaban invertidas
-            // con angry.)
+            // boca curva ∩ más amplia
             lv_obj_set_style_transform_angle(brow_left_, -500, 0);
             lv_obj_set_style_transform_angle(brow_right_, 500, 0);
             lv_obj_set_style_translate_y(brow_left_, 4, 0);
             lv_obj_set_style_translate_y(brow_right_, 4, 0);
+            lv_obj_set_size(mouth_arc_, 96, 36);
             lv_arc_set_bg_angles(mouth_arc_, 180, 360);
-            lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
         } else if (e == "angry") {
             // Enfadado: extremo interior de las cejas ABAJO (ceño fruncido),
-            // boca recta apretada
+            // boca recta apretada (barra horizontal)
             lv_obj_set_style_transform_angle(brow_left_, 400, 0);
             lv_obj_set_style_transform_angle(brow_right_, -400, 0);
             lv_obj_set_style_translate_y(brow_left_, 6, 0);
             lv_obj_set_style_translate_y(brow_right_, 6, 0);
+            lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_style_transform_scale_x(mouth_, 210, 0);
         } else if (e == "surprised" || e == "shocked") {
-            // Sorpresa: cejas muy arriba, boca O (arc pequeño casi cerrado),
+            // Sorpresa: cejas muy arriba, boca O (círculo pequeño),
             // pupilas más pequeñas (mirada amplia)
             lv_obj_set_style_translate_y(brow_left_, -18, 0);
             lv_obj_set_style_translate_y(brow_right_, -18, 0);
@@ -854,33 +849,33 @@ private:
             lv_obj_set_style_transform_scale_y(brow_left_, 280, 0);
             lv_obj_set_style_transform_scale_x(brow_right_, 280, 0);
             lv_obj_set_style_transform_scale_y(brow_right_, 280, 0);
-            lv_obj_set_style_transform_scale_y(mouth_arc_, 256, 0);
-            lv_obj_set_style_transform_scale_x(mouth_arc_, 256, 0);
-            lv_obj_set_size(mouth_arc_, 60, 60);   // cuadrado = círculo perfecto
+            lv_obj_set_size(mouth_arc_, 56, 56);   // cuadrado = círculo perfecto
             lv_arc_set_bg_angles(mouth_arc_, 0, 360);
             lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x2e5f78), LV_PART_INDICATOR);
-            lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_arc_opa(mouth_arc_, LV_OPA_COVER, LV_PART_INDICATOR);
         } else if (e == "thinking" || e == "confused") {
             // Pensando: ceja izquierda arriba, derecha abajo; boca torcida
+            // (usa la barra horizontal)
             lv_obj_set_style_translate_y(brow_left_, -12, 0);
             lv_obj_set_style_transform_angle(brow_left_, 200, 0);
             lv_obj_set_style_translate_y(brow_right_, 6, 0);
             lv_obj_set_style_transform_angle(brow_right_, 200, 0);
+            lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_style_transform_angle(mouth_, 200, 0);
             lv_obj_set_style_transform_scale_x(mouth_, 180, 0);
         } else if (e == "sleepy") {
-            // Somnoliento: cejas bajas, boca pequeña, SIN pupilas (ojos
-            // vacíos — se ocultan, no se bajan; el reset común las restaura)
+            // Somnoliento: cejas bajas, boca pequeña (barra), SIN pupilas
             lv_obj_set_style_translate_y(brow_left_, 6, 0);
             lv_obj_set_style_translate_y(brow_right_, 6, 0);
+            lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_style_transform_scale_x(mouth_, 180, 0);
             lv_obj_add_flag(pupil_left_, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(pupil_right_, LV_OBJ_FLAG_HIDDEN);
         } else {
-            // neutral / robot_2 / resto: reposo
-            lv_arc_set_bg_angles(mouth_arc_, 0, 180);
-            lv_obj_set_style_transform_scale_x(mouth_, 256, 0);
+            // neutral / robot_2 / resto: reposo — el reset ya dejó el arco
+            // en tamaño y color de reposo, no hace falta más
         }
         ESP_LOGI(TAG, "emotion -> %s", e.c_str());
     }
@@ -968,16 +963,24 @@ private:
         if (!lip_active_) {
             lip_active_ = true;
             lip_phase_ms_ = 0;
-            // Durante el lip sync la boca curva manda (el arco), con la
-            // sonrisa como base si la emoción es happy/neutral.
-            lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+            // El arco se asegura visible y en color cian brillante.
+            // El tamaño se anima desde el reposo (80x14) hasta abierto
+            // (~120x60) siguiendo la onda de voz. Respetamos la emoción
+            // actual: si era happy, mantiene el color más brillante.
+            // Pero asegurar ángulos ∪ (0-180) para que se vea como boca.
+            lv_obj_set_style_transform_scale_x(mouth_arc_, 256, 0);
+            lv_obj_set_style_transform_scale_y(mouth_arc_, 256, 0);
             lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
             lv_arc_set_bg_angles(mouth_arc_, 0, 180);
             lv_obj_set_style_arc_color(mouth_arc_, lv_color_hex(0x4dd7ff), LV_PART_INDICATOR);
+            lv_obj_set_style_arc_opa(mouth_arc_, LV_OPA_COVER, LV_PART_INDICATOR);
         }
 
         // Onda de "voz": frecuencia pseudo-aleatoria (4-12 Hz) + ruido de
-        // amplitud. Escalamos la boca en Y (abrir/cerrar) y un poco en X.
+        // amplitud. La boca CRECE EN TAMAÑO (no se escala en Y, que
+        // distorsionaba en una rendija). De reposo (80x14) a abierta
+        // (120x58), como un ovalo natural.
         lip_phase_ms_ += CLOCK_TICK_MS;
         float t = lip_phase_ms_ * 0.001f;
         float freq = 6.0f + 5.0f * (0.5f + 0.5f * sinf(t * 0.7f));       // 6-11 Hz
@@ -985,10 +988,10 @@ private:
         float open = 0.35f + 0.65f * (0.5f + 0.5f * wave);                // 0.35..1.0
         open *= (0.75f + 0.25f * (float)(rand() % 100) / 100.0f);          // ruido
 
-        int scale_y = 256 + (int)(500 * open);   // 256..~756 (abre mucho)
-        int scale_x = 256 + (int)(80 * open);    // se ensancha al abrir
-        lv_obj_set_style_transform_scale_y(mouth_arc_, scale_y, 0);
-        lv_obj_set_style_transform_scale_x(mouth_arc_, scale_x, 0);
+        // Boca natural: crece en ancho y alto proporcionalmente
+        int w = 80 + (int)(44 * open);    // 80→124 (se ensancha al abrir)
+        int h = 16 + (int)(46 * open);    // 16→62 (se abre)
+        lv_obj_set_size(mouth_arc_, w, h);
     }
 
     // Emoción sleepy: zzz flotando (arriba-derecha, en bucle) y boca de
@@ -1205,12 +1208,12 @@ private:
         lv_obj_set_style_translate_y(face_group_, ty, 0);
     }
 
-    // Expresiones animadas (idle): cada 4-7s las cejas suben y la boca se
-    // alarga (sonrisa más amplia) durante ~2s, luego vuelve. Solo cuando NO
+    // Expresiones animadas (idle): cada 4-7s las cejas suben y el arco
+    // se agranda (sonrisa más amplia) durante ~2s, luego vuelve. Solo cuando NO
     // hay una emoción del servidor activa (neutral/vacía), para no pisar la
     // expresión que manda el LLM (Opción B).
     void UpdateExpression() {
-        if (!brow_left_ || !mouth_) return;
+        if (!brow_left_ || !mouth_arc_) return;
         if (!current_emotion_.empty() && current_emotion_ != "neutral" &&
             current_emotion_ != "robot_2") return;
         int now_ms = lv_tick_get();
@@ -1229,8 +1232,7 @@ private:
             expr_start_ms_ = -1;
             lv_obj_set_style_translate_y(brow_left_, 0, 0);
             lv_obj_set_style_translate_y(brow_right_, 0, 0);
-            lv_obj_set_style_transform_scale_x(mouth_, 256, 0);
-            lv_obj_set_style_transform_scale_y(mouth_, 256, 0);
+            lv_obj_set_size(mouth_arc_, 80, 14);   // arco de reposo
             return;
         }
 
@@ -1246,10 +1248,10 @@ private:
         lv_obj_set_style_translate_y(brow_left_, brow_y, 0);
         lv_obj_set_style_translate_y(brow_right_, brow_y, 0);
 
-        // Boca: se alarga (sonrisa más amplia, 100% → 130% en X)
-        int mscale = 256 + (int)(76 * k);
-        lv_obj_set_style_transform_scale_x(mouth_, mscale, 0);
-        lv_obj_set_style_transform_scale_y(mouth_, 256, 0);
+        // Boca: el arco se agranda (sonrisa más amplia y visible)
+        int mw = 80 + (int)(24 * k);   // 80→104
+        int mh = 14 + (int)(14 * k);   // 14→28
+        lv_obj_set_size(mouth_arc_, mw, mh);
     }
 
     // ---------------- Sobresalto (despertar / shake) ----------------

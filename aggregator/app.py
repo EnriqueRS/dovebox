@@ -67,10 +67,46 @@ HOME_SENSORS = [
 ]
 
 TODOS_FILE = os.environ.get("TODOS_FILE", "/data/todos.json")
+EVENT_FILE = os.environ.get("EVENT_FILE", "/data/event.json")
 
 # ---------------------------------------------------------------- estado
 _cache = {"news": None, "news_ts": 0, "home": None, "home_ts": 0}
 _lock = threading.Lock()
+
+
+def load_event():
+    """Evento/temática activo para DoveBox (message + theme), o None si no hay.
+
+    Fuente: /data/event.json (editado a mano o vía API). Devuelve
+    {"theme": str, "message": str} solo si el objeto es válido y tiene ambos
+    campos no vacíos. Si el archivo no existe o está vacío -> None (cara
+    normal por defecto).
+    """
+    try:
+        with open(EVENT_FILE) as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    ev = data.get("event")
+    if not isinstance(ev, dict):
+        return None
+    theme = (ev.get("theme") or "").strip()
+    message = (ev.get("message") or "").strip()
+    if not theme or not message:
+        return None
+    return {"theme": theme, "message": message}
+
+
+def save_event(event):
+    """Guarda (event dict) o borra (None) el config de evento en EVENT_FILE."""
+    try:
+        data = {"event": event} if event else {}
+        with open(EVENT_FILE, "w") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"ERROR guardando evento: {e}", flush=True)
 
 
 def load_todos():
@@ -311,8 +347,11 @@ class Handler(BaseHTTPRequestHandler):
                 "todos": load_todos(),
                 "home": get_home(),
                 "news": {"feeds": get_news(), "updated": time.strftime("%H:%M:%S")},
+                "event": load_event(),
                 "updated": time.strftime("%H:%M:%S"),
             })
+        elif self.path == "/api/event":
+            self._send(200, {"event": load_event()})
         else:
             self._send(404, {"error": "not found"})
 
@@ -329,6 +368,22 @@ class Handler(BaseHTTPRequestHandler):
                 todos.append({"text": text, "done": False, "created": time.strftime("%Y-%m-%d %H:%M")})
                 save_todos(todos)
                 self._send(200, {"todos": todos})
+            except Exception as e:
+                self._send(400, {"error": str(e)})
+        elif self.path == "/api/event":
+            # Parametrizar el evento/temática: {"theme": "...", "message": "..."}.
+            # theme=""/message="" o ausentes -> borra el evento (cara normal).
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                theme = (body.get("theme") or "").strip()
+                message = (body.get("message") or "").strip()
+                if not theme or not message:
+                    save_event(None)
+                    self._send(200, {"event": None, "cleared": True})
+                else:
+                    save_event({"theme": theme, "message": message})
+                    self._send(200, {"event": load_event()})
             except Exception as e:
                 self._send(400, {"error": str(e)})
         else:

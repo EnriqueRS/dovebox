@@ -7,20 +7,21 @@ Basado en el listado de ideas discutido el 2026-08-09. El **top 3** es la priori
 
 | # | Idea | Esfuerzo | Impacto | Estado |
 |---|------|----------|---------|--------|
-| 1 | **Puente MCP → Hermes API por voz** (Fase 4 original) | Medio | ⭐⭐⭐ | 🔨 EN CURSO |
-| 2 | **Wake word en español** ("Oye Dove") | Alto | ⭐⭐⭐ | ⏳ Pendiente |
+| 1 | **Puente MCP → Hermes API por voz** (Fase 4 original) | Medio | ⭐⭐⭐ | ✅ COMPLETADO |
+| 2 | **Wake word en español** ("Oye Dove") | Alto | ⭐⭐⭐ | 🔨 EN CURSO |
 | 3 | **Briefing matutino** hablado | Bajo | ⭐⭐ | ⏳ Pendiente |
 
 ---
 
-### 1. Puente MCP → Hermes API por voz 🎯 (EN CURSO)
+### 1. Puente MCP → Hermes API por voz 🎯 (✅ COMPLETADO)
 
-**Objetivo**: que DoveBox pueda *hacer cosas* vía Hermes por voz: crear crons, consultar datos reales, controlar Home Assistant, lanzar tareas de fondo.
+**Completado: 2026-08-10**. Dockerizado como `dovebox-hermes-mcp` (FastMCP, streamable-http, :18110). 7 tools: `ha_get_state`, `ha_call_service`, `hermes_query`, `hermes_create_cron`, `aggregator_dashboard`, `aggregator_todo_add`, `aggregator_news`. El LLM del xiaozhi-server usa `function_call` para recibir las tools automáticamente.
 
-**Ejemplos de uso**:
-- "DoveBox, pon una alarma a las 8" → crea cron en Hermes
-- "DoveBox, ¿qué tiempo hace mañana?" → responde con datos reales
-- "DoveBox, apaga las luces del salón" → control HA
+**Ejemplos funcionales**:
+- "DoveBox, apaga las luces del salón" → `ha_call_service` → se apagan ✅
+- "DoveBox, ¿qué tiempo hace?" → `ha_get_state` → responde ✅
+- "DoveBox, dime las noticias" → `aggregator_news` → titulares ✅
+- "DoveBox, pon un recordatorio para mañana" → `hermes_create_cron` ✅
 
 **Mecanismo**: el xiaozhi-server ya soporta **server-side MCP** (`data/.mcp_server_settings.json`). Se monta un **MCP server propio** (Python, stdio) que expone tools que llaman a:
 - Hermes CLI (`hermes chat -q`, `hermes cron`) para tareas de agente
